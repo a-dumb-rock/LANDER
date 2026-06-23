@@ -1,0 +1,27 @@
+[build-system]
+requires = ["setuptools>=61.0"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "landr"
+version = "0.2.0"
+description = "Fatigue-aware ACL injury-risk screening from a single video."
+readme = "README.md"
+requires-python = ">=3.9"
+license = { text = "MIT" }
+dependencies = ["numpy>=1.24", "scipy>=1.10"]
+
+[project.optional-dependencies]
+pose = ["mediapipe>=0.10.9", "opencv-python>=4.8"]
+viz = ["matplotlib>=3.7"]
+vlm = ["openai>=1.30", "google-generativeai>=0.7", "python-dotenv>=1.0"]
+dev = ["pytest>=7.4"]
+
+[project.scripts]
+landr = "landr.cli:main"
+
+[tool.setuptools.packages.find]
+include = ["landr*"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
