@@ -71,6 +71,22 @@ def compute_metrics(seq: PoseSequence, events: LandingEvents) -> dict[str, Any]:
 
     peak_valgus = {s: peak_signed(series["knee_valgus"][s]) for s in ("left", "right")}
 
+    # --- START OF ADDED ASSESSMENT LOGIC ---
+    # Determine the worst inward collapse recorded across both knees
+    max_valgus_angle = max(abs(peak_valgus["left"]), abs(peak_valgus["right"]))
+    
+    # Evaluate risk categorization based on clinical research thresholds
+    if max_valgus_angle >= 10.0:
+        risk_level = "HIGH RISK"
+        recommendation = "High knee valgus detected. Focus on glute medius activation and landing softly."
+    elif max_valgus_angle >= 5.0:
+        risk_level = "MODERATE RISK"
+        recommendation = "Slight inward knee collapse. Monitor hip stability during fatigue."
+    else:
+        risk_level = "LOW RISK"
+        recommendation = "Excellent alignment. Mechanics look safe!"
+    # --- END OF ADDED ASSESSMENT LOGIC ---
+
     pf_l = float(np.max(series["knee_flexion"]["left"]))
     pf_r = float(np.max(series["knee_flexion"]["right"]))
     denom = (pf_l + pf_r) / 2.0 + 1e-6
@@ -97,4 +113,12 @@ def compute_metrics(seq: PoseSequence, events: LandingEvents) -> dict[str, Any]:
         "knee_flexion_displacement_deg": round(kf_low - kf_ic, 2),
         "peak_valgus_deg": {k: round(v, 2) for k, v in peak_valgus.items()},
         "asymmetry_index": round(float(asymmetry), 3),
+        
+        # --- NEW ASSESSMENT OUTPUT BLOCK ---
+        "acl_risk_assessment": {
+            "max_valgus_observed_deg": round(max_valgus_angle, 2),
+            "risk_factor": risk_level,
+            "coaching_cue": recommendation
+        }
+        # --- END OF NEW ASSESSMENT OUTPUT BLOCK ---
     }

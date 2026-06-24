@@ -1,0 +1,17 @@
+name: landr_mobile
+description: LANDR mobile client application.
+version: 1.0.0+1
+
+environment:
+  sdk: '>=3.0.0 <4.0.0'
+
+dependencies:
+  flutter:
+    sdk: flutter
+  camera: ^0.10.5
+  http: ^1.2.0
+  path_provider: ^2.1.1
+  image_picker: ^1.2.2
+
+flutter:
+  uses-material-design: true

@@ -77,14 +77,16 @@ def compare(fresh: AnalysisResult, fatigued: AnalysisResult) -> FatigueCompariso
         "less_total_increase": int(d_less),
     }
 
-    # Vulnerability score: weighted, clamped to 0-100. Weights chosen so each
-    # degradation channel contributes meaningfully; tune / learn later (Phase 4).
+    # Vulnerability score: weighted, clamped to 0-100. Weights chosen so each OLD
+    # degradation channel contributes meaningfully; tune / learn later (Phase 4). OLD
+    # weighting according to significance of risk
+    # exponential method
     score = (
-        max(0.0, d_valgus) * 2.5
-        + max(0.0, d_flexion_loss) * 1.5
-        + max(0.0, d_absorption_loss) * 1.0
-        + max(0.0, d_asym) * 40.0
-        + max(0, d_less) * 6.0
+        (max(0.0, d_valgus) ** 1.4) * 0.4
+        + max(0.0, d_flexion_loss) * 1.1
+        + max(0.0, d_absorption_loss) * 0.8
+        + (max(0.0, d_asym) * 25.0)
+        + max(0, d_less) * 4.0
     )
     score = float(max(0.0, min(100.0, score)))
     category = _band(score)
