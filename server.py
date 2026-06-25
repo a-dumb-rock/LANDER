@@ -17,6 +17,48 @@ try:
 except ImportError:
     from landr.biomechanics.landing import LandingEvents
 
+# =====================================================================
+# PASTED STEP 1: ADD THE AUTOMATION FUNCTION RIGHT HERE
+# =====================================================================
+def detect_landing_frames(pose_sequence):
+    """
+    Automatically calculates the exact frame indices for Initial Contact 
+    and Lowest Point by evaluating vertical landmark velocities.
+    """
+# 1. Print out the structure of the object in the terminal to inspect it
+    data = pose_sequence.landmarks
+    
+    # Extract Y coordinates (Index 1) for Left Ankle (15) and Right Ankle (16)
+    left_ankles = [frame[15][1] for frame in data]
+    right_ankles = [frame[16][1] for frame in data]
+    avg_ankles_y = [(l + r) / 2 for l, r in zip(left_ankles, right_ankles)]
+    
+    # Calculate velocity frame-by-frame (difference in Y pixels)
+    velocities = []
+    for i in range(1, len(avg_ankles_y)):
+        velocities.append(avg_ankles_y[i] - avg_ankles_y[i-1])
+        
+    initial_contact_frame = 15  # Fallback
+    max_downward_speed = 0
+    
+    for idx, v in enumerate(velocities):
+        if v > max_downward_speed:
+            max_downward_speed = v
+            initial_contact_frame = idx + 1
+            
+    # Extract Y coordinates (Index 1) for Left Hip (11) and Right Hip (12)
+    left_hips = [frame[11][1] for frame in data]
+    right_hips = [frame[12][1] for frame in data]
+    avg_hips_y = [(l + r) / 2 for l, r in zip(left_hips, right_hips)]
+    
+    # Find maximum Y position (lowest physical drop) after contact frame
+    search_zone = avg_hips_y[initial_contact_frame:]
+    if search_zone:
+        lowest_point_frame = initial_contact_frame + search_zone.index(max(search_zone))
+    else:
+        lowest_point_frame = initial_contact_frame + 20
+        
+    return initial_contact_frame, lowest_point_frame
 
 @app.post("/analyze-landing")
 async def analyze_landing(file: UploadFile = File(...)):
@@ -30,7 +72,20 @@ async def analyze_landing(file: UploadFile = File(...)):
         pose_seq = estimate_rtmpose(temp_video_path, mode="lightweight")
         
         # Call your landing frame event markers (Mock frames 15 & 35)
-        detected_events = LandingEvents(initial_contact=15, lowest_point=35, stabilized=60)
+        # =====================================================================
+        # UPDATED: REPLACED MOCK FRAMES WITH DYNAMIC DETECTION LOGIC
+        # =====================================================================
+        # 1. Feed the tracked coordinates from pose_seq into your new velocity function
+        auto_ic, auto_low = detect_landing_frames(pose_seq)
+        
+        # 2. Build your LandingEvents configuration mapping with the real frame numbers
+        detected_events = LandingEvents(
+            initial_contact=auto_ic, 
+            lowest_point=auto_low, 
+            stabilized=auto_low + 25
+        )
+        
+        print(f"--- Biomechanics Tracking: Auto-detected Contact frame {auto_ic}, Catch frame {auto_low} ---")
         
         # Run your math metrics (This returns a dictionary)
         results = compute_metrics(pose_seq, detected_events)
