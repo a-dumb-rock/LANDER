@@ -12,6 +12,7 @@ dependencies:
   http: ^1.2.0
   path_provider: ^2.1.1
   image_picker: ^1.2.2
+  fl_chart: ^0.65.0
 
 flutter:
   uses-material-design: true
