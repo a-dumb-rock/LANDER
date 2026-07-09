@@ -449,7 +449,10 @@ class _MiniTrend extends StatelessWidget {
   }
 }
 
-// ── TAB 3: SCREEN (CAPTURE) — "Line up the jump" ──────────────────────────────
+// ── TAB 3: SCREEN (CAPTURE) — Two-view: front then side ──────────────────────
+
+/// Which step of the two-view capture flow we're in.
+enum _CaptureStep { front, side, uploading, done }
 
 class CameraScreen extends StatefulWidget {
   final VoidCallback onAnalysed;
@@ -463,10 +466,13 @@ class _CameraScreenState extends State<CameraScreen> {
   CameraController? _controller;
   int _cameraIndex = 0;
   bool _isRecording = false;
-  bool _isProcessing = false;
   bool _isSwitching = false;
   String _statusText = '';
   final ImagePicker _picker = ImagePicker();
+
+  _CaptureStep _step = _CaptureStep.front;
+  File? _frontVideo;   // set after step 1
+  File? _sideVideo;    // set after step 2
 
   @override
   void initState() {
@@ -500,15 +506,12 @@ class _CameraScreenState extends State<CameraScreen> {
     await _initCamera((_cameraIndex + 1) % cameras.length);
   }
 
+  /// Pick from gallery for the current step.
   Future<void> _pickVideoFromGallery() async {
     try {
       final XFile? video = await _picker.pickVideo(source: ImageSource.gallery);
       if (video == null) return;
-      setState(() {
-        _isProcessing = true;
-        _statusText = 'Uploading to analysis server…';
-      });
-      await _uploadVideo(File(video.path));
+      await _handleCapturedFile(File(video.path));
     } catch (e) {
       setState(() => _statusText = 'Could not read video from gallery.');
     }
@@ -519,16 +522,11 @@ class _CameraScreenState extends State<CameraScreen> {
     if (_isRecording) {
       try {
         final file = await _controller!.stopVideoRecording();
-        setState(() {
-          _isRecording = false;
-          _isProcessing = true;
-          _statusText = 'Uploading captured video…';
-        });
-        await _uploadVideo(File(file.path));
+        setState(() => _isRecording = false);
+        await _handleCapturedFile(File(file.path));
       } catch (e) {
         setState(() {
           _isRecording = false;
-          _isProcessing = false;
           _statusText = 'Recording error';
         });
       }
@@ -537,7 +535,9 @@ class _CameraScreenState extends State<CameraScreen> {
         await _controller!.startVideoRecording();
         setState(() {
           _isRecording = true;
-          _statusText = 'Recording — stop when the landing is done.';
+          _statusText = _step == _CaptureStep.front
+              ? 'Recording FRONT — stop when landing is done.'
+              : 'Recording SIDE — stop when landing is done.';
         });
       } catch (e) {
         setState(() => _statusText = 'Could not start recording.');
@@ -545,10 +545,39 @@ class _CameraScreenState extends State<CameraScreen> {
     }
   }
 
-  Future<void> _uploadVideo(File videoFile) async {
-    final url = Uri.parse("http://192.168.0.162:8000/analyze-landing");
+  /// Called when a video is captured or picked; advances the state machine.
+  Future<void> _handleCapturedFile(File file) async {
+    if (_step == _CaptureStep.front) {
+      setState(() {
+        _frontVideo = file;
+        _step = _CaptureStep.side;
+        _statusText = 'Front clip saved — now record the SIDE view.';
+      });
+    } else if (_step == _CaptureStep.side) {
+      setState(() {
+        _sideVideo = file;
+        _step = _CaptureStep.uploading;
+        _statusText = 'Uploading both clips…';
+      });
+      await _uploadBothVideos(_frontVideo!, _sideVideo!);
+    }
+  }
+
+  void _resetCapture() {
+    setState(() {
+      _step = _CaptureStep.front;
+      _frontVideo = null;
+      _sideVideo = null;
+      _statusText = '';
+    });
+  }
+
+  Future<void> _uploadBothVideos(File front, File side) async {
+    final url = Uri.parse("http://192.168.0.162:8000/analyze-landing-two-view");
     try {
-      final request = http.MultipartRequest("POST", url)..files.add(await http.MultipartFile.fromPath('file', videoFile.path));
+      final request = http.MultipartRequest("POST", url)
+        ..files.add(await http.MultipartFile.fromPath('front', front.path))
+        ..files.add(await http.MultipartFile.fromPath('side', side.path));
       final response = await request.send();
       final responseData = await response.stream.bytesToString();
       if (response.statusCode == 200) {
@@ -556,22 +585,27 @@ class _CameraScreenState extends State<CameraScreen> {
         if (!mounted) return;
         setState(() {
           _statusText = 'Analysis complete.';
+          _step = _CaptureStep.done;
           RosterData.addSessionFromBackend(data);
         });
         ScaffoldMessenger.of(context).showSnackBar(SnackBar(
-          content: Text('Analysis ready for ${RosterData.selected.firstName}', style: const TextStyle(color: Colors.white, fontWeight: FontWeight.w700)),
+          content: Text('Two-view analysis ready for ${RosterData.selected.firstName}', style: const TextStyle(color: Colors.white, fontWeight: FontWeight.w700)),
           backgroundColor: LColors.navy,
           behavior: SnackBarBehavior.floating,
           shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
         ));
         widget.onAnalysed();
       } else {
-        setState(() => _statusText = 'Server error (${response.statusCode}).');
+        setState(() {
+          _statusText = 'Server error (${response.statusCode}).';
+          _step = _CaptureStep.front;
+        });
       }
     } catch (e) {
-      setState(() => _statusText = 'Cannot reach server. Check IP / network.');
-    } finally {
-      if (mounted) setState(() => _isProcessing = false);
+      setState(() {
+        _statusText = 'Cannot reach server. Check IP / network.';
+        _step = _CaptureStep.front;
+      });
     }
   }
 
@@ -594,6 +628,10 @@ class _CameraScreenState extends State<CameraScreen> {
   Widget build(BuildContext context) {
     final ready = _controller != null && _controller!.value.isInitialized && !_isSwitching;
     final athlete = RosterData.selected;
+    final isFront = _step == _CaptureStep.front;
+    final isUploading = _step == _CaptureStep.uploading;
+    final viewLabel = isFront ? 'FRONT VIEW' : 'SIDE VIEW';
+    final stepLabel = isFront ? 'Step 1 of 2 — Front' : 'Step 2 of 2 — Side';
 
     return SafeArea(
       bottom: false,
@@ -605,7 +643,6 @@ class _CameraScreenState extends State<CameraScreen> {
             children: [
               const Text('DROP-VERTICAL JUMP', style: TextStyle(fontSize: 10.5, color: LColors.inkMid, fontWeight: FontWeight.w700, letterSpacing: 1.4)),
               const Spacer(),
-              // athlete chip
               Container(
                 padding: const EdgeInsets.symmetric(horizontal: 11, vertical: 6),
                 decoration: BoxDecoration(color: LColors.navy, borderRadius: BorderRadius.circular(20)),
@@ -621,10 +658,34 @@ class _CameraScreenState extends State<CameraScreen> {
             ],
           ),
           const SizedBox(height: 12),
-          const Text('Line up the jump', style: TextStyle(fontSize: 26, fontWeight: FontWeight.w800, letterSpacing: -0.6, color: LColors.ink)),
-          const SizedBox(height: 18),
 
-          // Framed dark capture card
+          // Step header
+          Row(
+            children: [
+              Expanded(
+                child: Text(
+                  isFront ? 'Record front view' : 'Now record side view',
+                  style: const TextStyle(fontSize: 26, fontWeight: FontWeight.w800, letterSpacing: -0.6, color: LColors.ink),
+                ),
+              ),
+            ],
+          ),
+          const SizedBox(height: 4),
+          Text(stepLabel, style: const TextStyle(fontSize: 12, color: LColors.inkMid, fontWeight: FontWeight.w600, letterSpacing: 0.3)),
+          const SizedBox(height: 14),
+
+          // Step progress dots
+          Row(
+            mainAxisAlignment: MainAxisAlignment.center,
+            children: [
+              _StepDot(active: true, done: !isFront, label: 'Front'),
+              Container(width: 28, height: 2, color: isFront ? LColors.stroke : LColors.cyan),
+              _StepDot(active: !isFront, done: false, label: 'Side'),
+            ],
+          ),
+          const SizedBox(height: 16),
+
+          // Camera preview card
           AspectRatio(
             aspectRatio: 0.82,
             child: Container(
@@ -649,15 +710,13 @@ class _CameraScreenState extends State<CameraScreen> {
                                 child: CustomPaint(painter: SkeletonPainter(Pose.landing(t: 0, severity: 0, arms: 0.2), color: LColors.cyan, stroke: 3)),
                               ),
                       ),
-                    // scrim for legibility
                     const DecoratedBox(
                       decoration: BoxDecoration(
                         gradient: LinearGradient(begin: Alignment.topCenter, end: Alignment.bottomCenter, colors: [Color(0x66000000), Color(0x00000000), Color(0x55000000)], stops: [0, 0.3, 1]),
                       ),
                     ),
-                    // reticle
                     Positioned.fill(child: CustomPaint(painter: _ReticlePainter(_isRecording))),
-                    // FRONT VIEW pill
+                    // View label pill
                     Positioned(
                       top: 14, left: 0, right: 0,
                       child: Center(
@@ -668,12 +727,28 @@ class _CameraScreenState extends State<CameraScreen> {
                             borderRadius: BorderRadius.circular(8),
                             border: Border.all(color: LColors.cyan.withOpacity(0.6)),
                           ),
-                          child: const Text('FRONT VIEW', style: TextStyle(color: LColors.cyan, fontSize: 10, fontWeight: FontWeight.w800, letterSpacing: 1.5)),
+                          child: Text(viewLabel, style: const TextStyle(color: LColors.cyan, fontSize: 10, fontWeight: FontWeight.w800, letterSpacing: 1.5)),
                         ),
                       ),
                     ),
-                    if (_isRecording)
-                      const Positioned(top: 14, left: 14, child: _RecBadge()),
+                    // Front-clip-saved badge on step 2
+                    if (!isFront && !isUploading)
+                      Positioned(
+                        top: 14, right: 14,
+                        child: Container(
+                          padding: const EdgeInsets.symmetric(horizontal: 9, vertical: 5),
+                          decoration: BoxDecoration(color: LColors.green.withOpacity(0.9), borderRadius: BorderRadius.circular(8)),
+                          child: const Row(
+                            mainAxisSize: MainAxisSize.min,
+                            children: [
+                              Icon(Icons.check_rounded, color: Colors.white, size: 11),
+                              SizedBox(width: 4),
+                              Text('FRONT ✓', style: TextStyle(color: Colors.white, fontSize: 10, fontWeight: FontWeight.w800, letterSpacing: 0.8)),
+                            ],
+                          ),
+                        ),
+                      ),
+                    if (_isRecording) const Positioned(top: 14, left: 14, child: _RecBadge()),
                   ],
                 ),
               ),
@@ -681,28 +756,36 @@ class _CameraScreenState extends State<CameraScreen> {
           ),
           const SizedBox(height: 16),
 
-          // checklist
+          // Checklist — changes per step
           LCard(
             child: Column(
-              children: const [
+              children: isFront ? const [
                 _CheckRow('Whole body in frame, head to feet'),
                 SizedBox(height: 12),
-                _CheckRow('Facing the camera, knees visible'),
+                _CheckRow('Athlete facing the camera, knees visible'),
                 SizedBox(height: 12),
                 _CheckRow('Phone steady at hip height'),
                 SizedBox(height: 12),
                 _CheckRow('One clean rep, 3–5 seconds'),
+              ] : const [
+                _CheckRow('Move phone 90° to the athlete\'s side'),
+                SizedBox(height: 12),
+                _CheckRow('Whole body in frame, head to feet'),
+                SizedBox(height: 12),
+                _CheckRow('Athlete\'s side profile fully visible'),
+                SizedBox(height: 12),
+                _CheckRow('Same jump direction as front clip'),
               ],
             ),
           ),
           const SizedBox(height: 18),
 
-          if (_isProcessing)
+          if (isUploading)
             Column(
               children: [
                 const SizedBox(width: 30, height: 30, child: CircularProgressIndicator(color: LColors.navy, strokeWidth: 2.5)),
                 const SizedBox(height: 12),
-                Text(_statusText.isEmpty ? 'Analyzing biomechanics…' : _statusText, style: const TextStyle(color: LColors.inkMid, fontSize: 12)),
+                Text(_statusText.isEmpty ? 'Analyzing both views…' : _statusText, style: const TextStyle(color: LColors.inkMid, fontSize: 12)),
               ],
             )
           else ...[
@@ -710,7 +793,8 @@ class _CameraScreenState extends State<CameraScreen> {
               children: [
                 _OutlineButton(icon: Icons.photo_library_outlined, label: 'Upload clip', onTap: _pickVideoFromGallery),
                 const SizedBox(width: 12),
-                if (cameras.length > 1) _OutlineButton(icon: Icons.cameraswitch_outlined, label: 'Flip', onTap: _isRecording ? null : _flipCamera),
+                if (cameras.length > 1)
+                  _OutlineButton(icon: Icons.cameraswitch_outlined, label: 'Flip', onTap: _isRecording ? null : _flipCamera),
               ],
             ),
             const SizedBox(height: 14),
@@ -728,11 +812,23 @@ class _CameraScreenState extends State<CameraScreen> {
                   children: [
                     Icon(_isRecording ? Icons.stop_rounded : Icons.fiber_manual_record_rounded, color: Colors.white, size: 20),
                     const SizedBox(width: 9),
-                    Text(_isRecording ? 'Stop recording' : 'Record landing', style: const TextStyle(color: Colors.white, fontWeight: FontWeight.w700, fontSize: 14.5)),
+                    Text(
+                      _isRecording ? 'Stop recording' : (isFront ? 'Record front view' : 'Record side view'),
+                      style: const TextStyle(color: Colors.white, fontWeight: FontWeight.w700, fontSize: 14.5),
+                    ),
                   ],
                 ),
               ),
             ),
+            if (!isFront) ...[
+              const SizedBox(height: 10),
+              GestureDetector(
+                onTap: _resetCapture,
+                child: const Center(
+                  child: Text('← Retake front clip', style: TextStyle(color: LColors.inkMid, fontSize: 12, fontWeight: FontWeight.w600)),
+                ),
+              ),
+            ],
             if (_statusText.isNotEmpty && !_isRecording) ...[
               const SizedBox(height: 10),
               Center(child: Text(_statusText, style: const TextStyle(color: LColors.inkMid, fontSize: 11.5))),
@@ -740,6 +836,32 @@ class _CameraScreenState extends State<CameraScreen> {
           ],
         ],
       ),
+    );
+  }
+}
+
+// ── Step progress dot ────────────────────────────────────────────────────────
+class _StepDot extends StatelessWidget {
+  final bool active;
+  final bool done;
+  final String label;
+  const _StepDot({required this.active, required this.done, required this.label});
+
+  @override
+  Widget build(BuildContext context) {
+    final color = (active || done) ? LColors.cyan : LColors.stroke;
+    return Column(
+      children: [
+        Container(
+          width: 28, height: 28,
+          decoration: BoxDecoration(color: color.withOpacity(0.15), shape: BoxShape.circle, border: Border.all(color: color, width: 2)),
+          child: done
+              ? const Icon(Icons.check_rounded, size: 14, color: LColors.cyan)
+              : Center(child: Container(width: 8, height: 8, decoration: BoxDecoration(color: active ? LColors.cyan : Colors.transparent, shape: BoxShape.circle))),
+        ),
+        const SizedBox(height: 4),
+        Text(label, style: TextStyle(fontSize: 10, fontWeight: FontWeight.w600, color: color)),
+      ],
     );
   }
 }

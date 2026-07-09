@@ -57,6 +57,77 @@ def detect_landing_frames(pose_sequence):
         
     return initial_contact_frame, lowest_point_frame
 
+@app.post("/analyze-landing-two-view")
+async def analyze_landing_two_view(
+    front: UploadFile = File(...),
+    side: UploadFile = File(...),
+):
+    """Two-view endpoint: front video for valgus, side video for flexion/trunk."""
+    from landr.multiview import analyze_two_view_sequences
+    from landr.accuracy import improved_sequence
+    from landr.types import PoseSequence
+
+    front_path = f"temp_front_{front.filename}"
+    side_path = f"temp_side_{side.filename}"
+    with open(front_path, "wb") as f:
+        shutil.copyfileobj(front.file, f)
+    with open(side_path, "wb") as f:
+        shutil.copyfileobj(side.file, f)
+
+    try:
+        front_seq = estimate_rtmpose(front_path, mode="lightweight")
+        side_seq  = estimate_rtmpose(side_path,  mode="lightweight")
+        front_seq = improved_sequence(front_seq)
+        side_seq  = improved_sequence(side_seq)
+        result = analyze_two_view_sequences(front_seq, side_seq)
+        metrics = result.metrics
+
+        knee_valgus  = metrics.get("at_initial_contact", {}).get("knee_valgus_deg", 0.0)
+        knee_flexion = metrics.get("at_initial_contact", {}).get("knee_flexion_deg", 0.0)
+        asymmetry    = metrics.get("asymmetry_index", 0.0)
+        peak_valgus  = max(abs(metrics.get("peak_valgus_deg", {}).get("left", 0.0)),
+                           abs(metrics.get("peak_valgus_deg", {}).get("right", 0.0)))
+
+        if knee_valgus > 10.0 or knee_flexion < 30.0:
+            risk_level, risk_color = "HIGH RISK", "red"
+            feedback = "Danger: Severe knee inward cave or stiff landing detected. High ACL stress."
+        elif 5.0 <= knee_valgus <= 10.0 or 30.0 <= knee_flexion <= 45.0:
+            risk_level, risk_color = "MODERATE RISK", "orange"
+            feedback = "Caution: Minor knee valgus or shallow landing depth. Watch for fatigue."
+        else:
+            risk_level, risk_color = "LOW RISK", "green"
+            feedback = "Optimal: Safe knee alignment and force absorption depth."
+
+        out = dict(metrics)
+        out.update({
+            "knee_valgus_angle": round(knee_valgus, 2),
+            "knee_flexion_angle": round(knee_flexion, 2),
+            "asymmetry_index": round(asymmetry, 3),
+            "stability_score": 85.0,
+            "acl_risk_level": risk_level,
+            "acl_risk_color": risk_color,
+            "feedback_message": feedback,
+            "mode": "two_view",
+            "acl_risk_assessment": {
+                "risk_factor": risk_level,
+                "max_valgus_observed_deg": round(peak_valgus, 2),
+                "coaching_cue": feedback,
+                "risk_color_code": risk_color,
+            },
+        })
+        return JSONResponse(content=out)
+
+    except Exception as e:
+        print("\n=== TWO-VIEW CRASH ===")
+        traceback.print_exc()
+        print("=====================\n")
+        return JSONResponse(status_code=500, content={"error": str(e)})
+    finally:
+        for p in (front_path, side_path):
+            if os.path.exists(p):
+                os.remove(p)
+
+
 @app.post("/analyze-landing")
 async def analyze_landing(file: UploadFile = File(...)):
     # Save the incoming mobile video clip payload to disk

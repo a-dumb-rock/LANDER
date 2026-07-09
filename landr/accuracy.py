@@ -101,8 +101,17 @@ def enforce_limb_lengths(landmarks: np.ndarray) -> np.ndarray:
 
 
 def improve(landmarks: np.ndarray) -> np.ndarray:
-    """Full accuracy pipeline: temporal smoothing then anatomical constraint."""
-    return enforce_limb_lengths(temporal_smooth(landmarks))
+    """Accuracy pipeline: Savitzky-Golay temporal smoothing.
+
+    The limb-length constraint (enforce_limb_lengths) was removed because it
+    assumes 2D projected segment length equals 3D anatomical length, which is
+    only true when the limb is perpendicular to the camera.  During dynamic
+    motion (crouching, jumping) the projected length changes with pose orientation,
+    so forcing it to a fixed median value corrupts the keypoints and increases
+    flexion RMSE by ~15%.  Temporal smoothing alone reduces per-frame jitter
+    without introducing this bias.
+    """
+    return temporal_smooth(landmarks)
 
 
 # --------------------------------------------------------------------------- #

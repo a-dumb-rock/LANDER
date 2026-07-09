@@ -19,6 +19,10 @@ env/
 results/
 runs/
 
+# Validation cache (large binary files, regenerated automatically)
+validation/pose_cache/
+validation/results/
+
 # OS / editors
 .DS_Store
 .idea/
