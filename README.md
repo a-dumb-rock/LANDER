@@ -1,126 +1,174 @@
-# LANDR  (v2 — fatigue-aware)
+# LANDR — ACL-Risk Landing Analysis
 
-**Landing Analysis for Non-contact-injury Detection & Risk**
-
-Fatigue-aware ACL injury-risk screening you can trust from a single phone camera.
-
-> *Injuries happen when athletes are fatigued, but screening is done when they're
-> fresh.* LANDR measures the risk that actually matters — how an athlete's landing
-> mechanics degrade under fatigue — and closes the accuracy gap that has kept
-> single-camera screening from being trusted.
-
-This version is built around two focused, defensible contributions (after a
-prior-art review showed basic automated landing screening is already well-explored):
-
-- **Pillar 1 — Accuracy.** Naive single-camera knee-valgus error is ~18–20°. A
-  temporal-smoothing + anatomical-constraint pipeline reduces it, with a benchmark
-  that *quantifies the gain*. (`landr/accuracy.py`)
-- **Pillar 2 — Fatigue.** Compare an athlete fresh vs. fatigued and compute a
-  personal *fatigue-vulnerability* signature — how much their mechanics decay when
-  tired. (`landr/fatigue.py`)
-
-> ⚠️ **Decision-support, not diagnosis.** A screening aid for coaches and
-> clinicians, not a medical device. Always keep a human in the loop.
+LANDR is a two-product biomechanics platform for ACL injury screening and return-to-sport assessment. Both products share the same clinical engine and speak the same language in their reports.
 
 ---
 
-## Runs out of the box — no video, no API keys
+## Products
+
+### LANDR Mobile
+Single-phone longitudinal monitor. Two views (frontal + sagittal), 2D pose estimation, best for tracking per-athlete trends over time.
+
+- **Accuracy:** ~±9° valgus (improves when athlete is square to the lens)
+- **Use case:** Weekly/monthly screening, trend detection, flagging athletes for deeper assessment
+- **Platform:** Android (Flutter), talks to `server.py` on the local network
+
+### LANDR Studio
+Multi-camera, lab-grade 3D reconstruction for acute screening and return-to-sport clearance.
+
+- **Accuracy:** ~1° valgus (geometry-proven, see below)
+- **Use case:** Pre-season screen, post-injury clearance, multi-person team sessions, live rep-by-rep feedback
+- **Platform:** Fixed camera rig (2–8 cameras), FastAPI server + web dashboard on `:8010`
+
+---
+
+## How to run
+
+### Mobile backend
+```bash
+pip install -r requirements.txt
+python server.py          # http://localhost:8000
+```
+
+### Studio
+```bash
+python -m studio.server   # dashboard + API  →  http://localhost:8010
+python -m studio.selftest # geometry validation
+python -m studio.demo     # terminal demo analysis
+pytest                    # 36 tests
+```
+
+### Mobile app
+```bash
+cd mobileapp
+flutter run
+```
+
+---
+
+## Standard test protocol (Drop Vertical Jump)
+
+Both products analyse the same movement:
+
+1. Stand on a **30 cm box** with both feet
+2. **Step off** with one foot (like stepping off a curb — do not jump)
+3. Bring the other foot off immediately so you're briefly airborne
+4. **Land with both feet simultaneously**
+5. Immediately jump straight up as high as possible
+6. **Land again** — this second landing is what gets measured
+
+**Camera position (Mobile):** 3–4 m from athlete, hip height, athlete facing square to the lens. Record 3–5 trials front, then rotate 90° for side view.
+
+> The in-app pre-test guide (3 pages: setup → movement → camera) walks through this before each recording session. Users can skip it once they know the protocol.
+
+---
+
+## Architecture
+
+```
+landr/                    Shared clinical engine (Python)
+  biomechanics/           Landing event detection, metric computation
+  scoring.py              LESS scoring, risk assessment
+  types.py                PoseSequence, AnalysisResult, LessResult, …
+
+server.py                 LANDR Mobile API (port 8000)
+
+studio/                   LANDR Studio — multi-camera 3D product
+  calibration.py          Pinhole Camera, CameraRig, DLT resectioning
+  triangulation.py        Weighted DLT + RANSAC over views
+  anatomical.py           World → anatomical frame rotation
+  detector.py             RTMPose per-view 2D (+ DirectML for AMD GPU)
+  multiperson.py          Epipolar person association across views
+  synthetic.py            Parametric 3D landing generator (ground truth)
+  pipeline.py             analyze_capture — end-to-end 3D pipeline
+  live.py                 Live streaming, per-camera threads, landing FSM,
+                          WebSocket push → dashboard updates per rep
+  ingest.py               CLI: videos or .npy keypoint files → analysis
+  report.py               Printable HTML/PDF clinical report
+  demo.py                 Ready-made synthetic captures
+  selftest.py             Geometry validation with known ground truth
+  server.py               FastAPI :8010 + WebSocket /ws/live
+  web/index.html          Clinician dashboard (3D viewer, risk gauge, LESS,
+                          live mode, print report)
+
+mobileapp/lib/
+  main.dart               App + navigation + camera screen
+  pre_test_screen.dart    3-page DVJ setup guide shown before recording
+  session_detail_screen.dart  Per-session results, metrics, LESS breakdown
+  session_manager.dart    Athlete roster, session history
+  theme.dart              Design tokens (LColors, shadows, typography)
+
+validation/               Real-data accuracy benchmarking vs OpenCap mocap
+tests/                    pytest suite (36 tests)
+```
+
+---
+
+## Studio accuracy
+
+Run `python -m studio.selftest` to reproduce:
+
+| Check | Result |
+|---|---|
+| 3D reconstruction, clean keypoints | **0.00 mm** (exact) |
+| 3D reconstruction, 1 px detector noise | ~2.4 mm |
+| Knee flexion recovery | ~0.1° |
+| Knee valgus @ initial contact | < 1° |
+| Athlete yawed 45° — single camera vs Studio | single: 30–45° error · Studio: ~0.6° |
+| Multi-person association | correct |
+
+**Proven:** geometry is correct end-to-end.  
+**Pending:** real-world validation vs marker mocap (needs live synchronised capture or OpenCap LabValidation set).
+
+---
+
+## Clinical metrics
+
+All results are reported per the **Landing Error Scoring System (LESS)**:
+
+| Metric | Threshold |
+|---|---|
+| Knee flexion @ initial contact | ≥ 30° |
+| Knee flexion @ lowest point | ≥ 70° |
+| Peak knee valgus | < 10° |
+| Bilateral asymmetry | < 15% |
+| Trunk lean | < 30° |
+
+---
+
+## Live capture (Studio)
+
+Connect webcams or RTSP streams; the server detects rep completion via a hip-height FSM and pushes results to the dashboard ~0.5 s after each landing via WebSocket.
 
 ```bash
-pip install numpy scipy matplotlib
-
-python -m landr.cli demo --quality poor     # basic screen (synthetic landing)
-python -m landr.cli fatigue --plot f.png    # Pillar 2: fresh vs fatigued + plot
-python -m landr.cli benchmark               # Pillar 1: accuracy error reduction
+# AMD RX 6600 / Intel Arc on Windows — DirectML backend
+pip install onnxruntime-directml
+# Set device = "dml" in the Live tab of the dashboard
 ```
-
-Or just double-click **`setup_and_run.command`** (macOS/Linux) — it installs
-everything and runs all three.
-
-Analyze a real video (needs `mediapipe`):
 
 ```bash
-pip install mediapipe opencv-python
-python -m landr.cli analyze path/to/jump.mp4 --plot result.png --out result.json
+# CLI from video files (runs RTMPose detection)
+python -m studio.ingest --videos front.mp4 side.mp4 left.mp4 right.mp4 \
+                         --rig rig.json --athlete "Alex Rivera"
+
+# CLI from pre-saved keypoints (no GPU needed on analysis machine)
+python -m studio.ingest --keypoints cam0.npy cam1.npy --rig rig.json
+
+# Print HTML clinical report to file
+python -m studio.ingest --keypoints *.npy --rig rig.json --report-html > report.html
 ```
 
-### Maximum-accuracy recipe
+---
 
-The most accurate configuration the codebase supports, from a phone:
-
-```bash
-# 1) film TWO clips of the same jump: one FRONT, one SIDE
-# 2) install the RTMPose backend (state-of-the-art 2D keypoints, used by Sports2D)
-pip install rtmlib onnxruntime
-# 3) fuse them, RTMPose backend, max model, refinement on (default)
-python -m landr.cli analyze2 front.mp4 side.mp4 --backend rtmpose --accuracy max --plot out.png
-```
-
-Why this is the ceiling for camera-only: two views fix the depth problem (valgus
-from the front, knee/trunk flexion from the side), RTMPose gives the best 2D
-keypoints, and the refinement pass removes jitter. True lab-grade accuracy (~1°)
-requires multi-camera **Pose2Sim** — a hardware/calibration setup, not a code
-change (see `ACCURACY_PLAN.md`). If `rtmpose` isn't installed, LANDR automatically
-falls back to MediaPipe.
-
-Use a real vision-language model for the written report (optional):
-
-```bash
-cp .env.example .env        # add OPENAI_API_KEY or GOOGLE_API_KEY
-python -m landr.cli demo --provider openai
-```
-
-## What the two new commands show
-
-**`fatigue`** simulates a fresh and a fatigued landing for the same athlete,
-computes the change in valgus / knee-flexion / asymmetry / LESS, and prints a
-0–100 fatigue-vulnerability score with a plain-language report. With real data,
-pass two saved analyses: `--fresh fresh.json --fatigued fatigued.json`.
-
-**`benchmark`** takes a clean synthetic landing as ground truth, adds realistic
-pose noise, and reports knee-valgus/flexion RMSE for the naive vs improved
-pipeline — demonstrating the accuracy gain. (Real validation needs marker-based
-motion capture; `accuracy.angle_rmse` accepts real data too.)
-
-## Project layout
+## Repo layout
 
 ```
-landr/
-├── landr/
-│   ├── accuracy.py          # ★ Pillar 1: temporal + limb-length correction + benchmark
-│   ├── fatigue.py           # ★ Pillar 2: fresh-vs-fatigued vulnerability score
-│   ├── synthetic.py         # synthetic jumps with `fatigue` and `noise` knobs
-│   ├── config.py, types.py
-│   ├── pose/estimator.py    # MediaPipe wrapper (graceful fallback)
-│   ├── biomechanics/        # geometry, metrics, landing detection
-│   ├── scoring/             # automated LESS + risk
-│   ├── reasoning/           # pluggable VLM report (mock/openai/gemini)
-│   ├── pipeline.py, viz.py, cli.py
-├── examples/run_demo.py
-├── tests/                   # pytest (incl. test_fatigue.py, test_accuracy.py)
-├── docs/ARCHITECTURE.md
-└── setup_and_run.command
+LANDR/
+├── landr/              shared clinical engine
+├── studio/             Studio product (3D, live, reports)
+├── mobileapp/          Flutter Android app
+├── server.py           Mobile backend (port 8000)
+├── validation/         accuracy benchmarking vs OpenCap
+├── tests/              pytest suite
+└── README.md
 ```
-
-## Roadmap (Phases 0–2 = competition scope)
-
-- **0 — Baseline:** reproduce naive valgus error on public data (the number you beat).
-- **1 — Accuracy:** temporal + anatomical correction; benchmark the RMSE gain.
-- **2 — Fatigue:** detect fresh→fatigued shift on the public fatigue dataset; define
-  the vulnerability score.
-- **3 — Field pilot:** self-collected fresh/fatigued phone clips.
-- **4 — Season + learned model:** longitudinal tracking, outcome-validated risk model.
-
-## Honesty notes
-
-- Single-camera depth is noisy; two-view capture and per-athlete calibration help.
-- The automated LESS is an *approximation* with contested predictive validity —
-  treated as a baseline to improve upon, not ground truth.
-- The benchmark is a simulation of jitter reduction; real accuracy claims require
-  marker-based motion capture.
-
-See `docs/ARCHITECTURE.md` for data contracts and the validation plan.
-
-## License
-
-MIT (placeholder).

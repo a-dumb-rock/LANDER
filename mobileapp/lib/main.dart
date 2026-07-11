@@ -7,6 +7,7 @@ import 'package:http/http.dart' as http;
 import 'package:image_picker/image_picker.dart';
 import 'package:fl_chart/fl_chart.dart';
 import 'config.dart';
+import 'pre_test_screen.dart';
 import 'session_detail_screen.dart';
 import 'session_manager.dart';
 import 'skeleton.dart';
@@ -93,7 +94,9 @@ class _MainNavigationScreenState extends State<MainNavigationScreen> {
     final pages = [
       RosterPage(onNewScreening: () => _go(2), onOpenAthlete: _openAthlete),
       const TrendsPage(),
-      CameraScreen(onAnalysed: () => _go(3)),
+      PreTestScreen(onReady: () => Navigator.of(context).push(
+        MaterialPageRoute(builder: (_) => CameraScreen(onAnalysed: () { Navigator.of(context).pop(); _go(3); })),
+      )),
       ResultsPage(onCapture: () => _go(2)),
       const InfoPage(),
     ];
