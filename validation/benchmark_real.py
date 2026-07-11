@@ -21,6 +21,18 @@ import numpy as np
 
 from .align import Convention, align_series, fit_convention, rmse
 
+# The OpenCap videos are pre-synchronised to mocap (`_syncdWithMocap`), so the true
+# video↔mocap lag is ~0 (observed residual ~0.1s = a few samples @60fps). A ±0.5s
+# search covers that residual while blocking two failure modes of a wide (±1s) search:
+#   * flexion (fast transient): the cross-correlation RAILS on clips whose IK ground
+#     truth spans only a short window, aligning the pose's standing phase to the
+#     mocap's flexed phase -> 5.7 -> 12.7 deg, 10/42 clips wrongly >20 deg.
+#   * valgus (low-amplitude/noisy): a wide window finds spurious ~0.9s lags (median
+#     |lag| 54 samples) that coincidentally deflate RMSE -> a falsely-low 8.6 vs the
+#     honest ~9.0 deg.
+# Results are stable from ±0.5 down to ±0.25s; below ~±0.1s it clips real lag.
+MAX_LAG_S = 0.5
+
 
 # --------------------------------------------------------------------------- #
 # Intermediate representation (decouples the science from the file walking)
@@ -41,34 +53,39 @@ class TrialAngles:
     y_gt: np.ndarray
 
 
-def _concat_for_convention(trials: list[TrialAngles], metric: str) -> tuple[np.ndarray, np.ndarray]:
-    """Pool tune-split IMPROVED predictions vs GT (roughly aligned) to fit sign+offset.
+def _concat_for_convention(
+    trials: list[TrialAngles], metric: str, ref_fps: float = 60.0
+) -> tuple[np.ndarray, np.ndarray]:
+    """Pool tune-split IMPROVED predictions vs GT to fit the convention.
 
-    We use a coarse resample to a common length per trial before pooling; the
-    convention is only a sign+offset, so exact alignment is unnecessary here.
+    Each trial is time-windowed to the pred/GT overlap and lag-aligned (via
+    ``align_series``) BEFORE pooling — the same representation the convention is
+    later scored on. The previous coarse ``linspace`` index-resample assumed pred
+    and GT shared a phase-aligned window; they do not (the IK GT spans only the
+    landing, and video/mocap clocks differ by a lag), which biased the fitted
+    offset badly on fast transients (e.g. drop-jump flexion: +23.8 deg -> the true
+    lag-aligned value is ~+4 deg). See align.py for the alignment contract.
     """
     preds, gts = [], []
     for tr in trials:
         if tr.metric != metric:
             continue
-        n = min(len(tr.y_improved), len(tr.y_gt))
-        if n < 3:
+        if min(len(tr.y_improved), len(tr.y_gt)) < 3:
             continue
-        # coarse index-resample GT onto pred length for a pooled sign/offset fit
-        gt_rs = np.interp(
-            np.linspace(0, 1, len(tr.y_improved)),
-            np.linspace(0, 1, len(tr.y_gt)),
-            tr.y_gt,
-        )
-        preds.append(tr.y_improved)
-        gts.append(gt_rs)
+        try:
+            ap = align_series(tr.t_pred, tr.y_improved, tr.t_gt, tr.y_gt,
+                              convention=None, ref_fps=ref_fps, max_lag_s=MAX_LAG_S)
+        except ValueError:
+            continue
+        preds.append(ap.pred)
+        gts.append(ap.gt)
     if not preds:
         return np.array([]), np.array([])
     return np.concatenate(preds), np.concatenate(gts)
 
 
 def fit_conventions(tune_trials: list[TrialAngles]) -> dict[str, Convention]:
-    """Fit one Convention per metric on the tune split only."""
+    """Fit one sign+offset Convention per metric on the tune split only."""
     conventions: dict[str, Convention] = {}
     for metric in ("flexion", "valgus"):
         p, g = _concat_for_convention(tune_trials, metric)
@@ -97,9 +114,9 @@ def score_trial(tr: TrialAngles, convention: Convention, ref_fps: float = 60.0) 
     and the lag is found independently for each (they may jitter differently).
     """
     a_naive = align_series(tr.t_pred, tr.y_naive, tr.t_gt, tr.y_gt,
-                           convention=convention, ref_fps=ref_fps)
+                           convention=convention, ref_fps=ref_fps, max_lag_s=MAX_LAG_S)
     a_imp = align_series(tr.t_pred, tr.y_improved, tr.t_gt, tr.y_gt,
-                         convention=convention, ref_fps=ref_fps)
+                         convention=convention, ref_fps=ref_fps, max_lag_s=MAX_LAG_S)
     return TrialScore(
         subject=tr.subject, trial=tr.trial, metric=tr.metric, side=tr.side,
         naive_rmse=rmse(a_naive.pred, a_naive.gt),
@@ -119,7 +136,8 @@ class BenchmarkReport:
         out: dict = {
             "tune_subjects": self.tune_subjects,
             "test_subjects": self.test_subjects,
-            "conventions": {k: {"sign": v.sign, "offset": round(v.offset, 3)}
+            "conventions": {k: {"sign": v.sign, "offset": round(v.offset, 3),
+                                 "scale": round(v.scale, 3)}
                             for k, v in self.conventions.items()},
             "per_metric": {},
             "n_trials": len(self.scores),

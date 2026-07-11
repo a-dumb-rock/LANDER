@@ -76,13 +76,19 @@ def apply_lag(pred: np.ndarray, gt: np.ndarray, lag: int) -> tuple[np.ndarray, n
 
 @dataclass
 class Convention:
-    """A global sign+offset mapping from LANDR angles to the GT convention."""
+    """A global mapping from LANDR angles to the GT convention.
+
+    apply(y) = sign * scale * y + offset. ``scale`` defaults to 1.0 so the
+    sign+offset convention from ``fit_convention`` behaves as a pure flip+shift;
+    the gain term exists only so diagnostics can express a fitted linear gain.
+    """
 
     sign: float = 1.0
     offset: float = 0.0
+    scale: float = 1.0
 
     def apply(self, y: np.ndarray) -> np.ndarray:
-        return self.sign * np.asarray(y, float) + self.offset
+        return self.sign * self.scale * np.asarray(y, float) + self.offset
 
 
 def fit_convention(pred: np.ndarray, gt: np.ndarray) -> Convention:

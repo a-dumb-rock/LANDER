@@ -67,7 +67,16 @@ def compute_metrics(seq: PoseSequence, events: LandingEvents) -> dict[str, Any]:
     trunk_ic = at(series["trunk_flexion"], ic)
 
     def peak_signed(arr: np.ndarray) -> float:
-        return float(arr[int(np.argmax(np.abs(arr)))])
+        # Peak over the LANDING PHASE only (initial contact -> stabilised), not the
+        # whole clip. The whole-clip max catches flight-phase / pre-landing pose
+        # noise — on real single-camera data that inflates a safe landing's valgus
+        # to ~16 deg (often varus-signed) even though contact/lowest are ~2-4 deg.
+        lo = int(np.clip(ic, 0, len(arr) - 1))
+        hi = int(np.clip(events.stabilized + 1, lo + 1, len(arr)))
+        win = arr[lo:hi]
+        if win.size == 0:
+            win = arr
+        return float(win[int(np.argmax(np.abs(win)))])
 
     peak_valgus = {s: peak_signed(series["knee_valgus"][s]) for s in ("left", "right")}
 

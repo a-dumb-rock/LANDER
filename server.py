@@ -103,7 +103,6 @@ async def analyze_landing_two_view(
             "knee_valgus_angle": round(knee_valgus, 2),
             "knee_flexion_angle": round(knee_flexion, 2),
             "asymmetry_index": round(asymmetry, 3),
-            "stability_score": 85.0,
             "acl_risk_level": risk_level,
             "acl_risk_color": risk_color,
             "feedback_message": feedback,
@@ -162,7 +161,6 @@ async def analyze_landing(file: UploadFile = File(...)):
         knee_valgus = results.get("knee_valgus_angle", 6.5) 
         knee_flexion = results.get("knee_flexion_angle", 38.0)
         asymmetry = results.get("asymmetry_index", 0.035)
-        stability = results.get("stability_score", 85.0)
 
         # Evaluate Biomechanical Danger Zones and Thresholds
         if knee_valgus > 10.0 or knee_flexion < 30.0:
@@ -182,7 +180,6 @@ async def analyze_landing(file: UploadFile = File(...)):
         results["knee_valgus_angle"] = knee_valgus
         results["knee_flexion_angle"] = knee_flexion
         results["asymmetry_index"] = asymmetry
-        results["stability_score"] = stability
         results["acl_risk_level"] = risk_level
         results["acl_risk_color"] = risk_color
         results["feedback_message"] = feedback

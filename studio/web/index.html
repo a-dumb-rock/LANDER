@@ -1,0 +1,741 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>LANDR Studio — Multi-Camera Biomechanics</title>
+<style>
+  :root {
+    --bg:#0d1219; --panel:#151d29; --panel2:#1b2532; --line:#27313f;
+    --text:#e7edf5; --muted:#8695a8; --faint:#5c6b7e;
+    --accent:#22c7b8; --accent2:#4a9eff;
+    --good:#34d399; --warn:#fbbf24; --bad:#f87171;
+    --shadow:0 1px 0 rgba(255,255,255,.02), 0 8px 30px rgba(0,0,0,.35);
+    --mono:ui-monospace,"SF Mono",Menlo,Consolas,monospace;
+    --sans:system-ui,-apple-system,"Segoe UI",Roboto,Helvetica,Arial,sans-serif;
+  }
+  @media (prefers-color-scheme: light) {
+    :root {
+      --bg:#eef1f5; --panel:#ffffff; --panel2:#f5f8fb; --line:#dfe5ec;
+      --text:#16202c; --muted:#5a6b7d; --faint:#8a99a9;
+      --shadow:0 1px 2px rgba(16,32,48,.06), 0 8px 24px rgba(16,32,48,.08);
+    }
+  }
+  :root[data-theme="light"] {
+    --bg:#eef1f5; --panel:#ffffff; --panel2:#f5f8fb; --line:#dfe5ec;
+    --text:#16202c; --muted:#5a6b7d; --faint:#8a99a9;
+    --shadow:0 1px 2px rgba(16,32,48,.06), 0 8px 24px rgba(16,32,48,.08);
+  }
+  :root[data-theme="dark"] {
+    --bg:#0d1219; --panel:#151d29; --panel2:#1b2532; --line:#27313f;
+    --text:#e7edf5; --muted:#8695a8; --faint:#5c6b7e;
+    --shadow:0 1px 0 rgba(255,255,255,.02), 0 8px 30px rgba(0,0,0,.35);
+  }
+  * { box-sizing:border-box; }
+  body {
+    margin:0; background:var(--bg); color:var(--text); font-family:var(--sans);
+    font-size:14px; line-height:1.45; -webkit-font-smoothing:antialiased;
+  }
+  .sr-only{position:absolute;width:1px;height:1px;overflow:hidden;clip:rect(0 0 0 0);}
+  a{color:inherit;}
+  .wrap{ max-width:1240px; margin:0 auto; padding:20px 22px 60px; }
+
+  /* Header */
+  header{
+    display:flex; align-items:center; gap:18px; flex-wrap:wrap;
+    padding:14px 2px 20px; border-bottom:1px solid var(--line); margin-bottom:22px;
+  }
+  .brand{ display:flex; align-items:baseline; gap:10px; }
+  .brand b{ font-size:19px; letter-spacing:-.02em; }
+  .brand .studio{ color:var(--accent); font-weight:700; }
+  .brand .tag{
+    font-size:10px; letter-spacing:.14em; text-transform:uppercase; color:var(--muted);
+    border:1px solid var(--line); padding:3px 7px; border-radius:20px;
+  }
+  .spacer{ flex:1; }
+  .rigstat{ display:flex; align-items:center; gap:8px; font-size:12px; color:var(--muted); }
+  .rigstat .dot{ width:8px;height:8px;border-radius:50%;background:var(--good);
+    box-shadow:0 0 0 3px color-mix(in srgb,var(--good) 22%,transparent); }
+  .seg{ display:inline-flex; background:var(--panel2); border:1px solid var(--line);
+    border-radius:9px; padding:3px; gap:2px; }
+  .seg button{
+    font:inherit; font-size:12.5px; font-weight:600; color:var(--muted);
+    background:transparent; border:0; padding:6px 13px; border-radius:6px; cursor:pointer;
+  }
+  .seg button.active{ background:var(--panel); color:var(--text); box-shadow:var(--shadow); }
+  .iconbtn{ background:var(--panel2); border:1px solid var(--line); color:var(--muted);
+    width:34px;height:34px;border-radius:8px;cursor:pointer;font-size:15px; }
+
+  /* Layout */
+  .grid{ display:grid; grid-template-columns: 1.55fr 1fr; gap:18px; align-items:start; }
+  @media (max-width:960px){ .grid{ grid-template-columns:1fr; } }
+  .card{ background:var(--panel); border:1px solid var(--line); border-radius:14px;
+    box-shadow:var(--shadow); }
+  .card .hd{ display:flex; align-items:center; gap:10px; padding:14px 16px;
+    border-bottom:1px solid var(--line); }
+  .card .hd h2{ margin:0; font-size:12px; letter-spacing:.11em; text-transform:uppercase;
+    color:var(--muted); font-weight:700; }
+  .card .bd{ padding:16px; }
+
+  /* Athlete strip */
+  .athlete{ display:flex; align-items:center; gap:14px; margin-bottom:16px; }
+  .avatar{ width:46px;height:46px;border-radius:12px; background:var(--panel2);
+    border:1px solid var(--line); display:grid; place-items:center; font-weight:700;
+    color:var(--accent); font-size:16px; }
+  .athlete .name{ font-size:17px; font-weight:650; letter-spacing:-.01em; }
+  .athlete .sub{ font-size:12px; color:var(--muted); }
+  .pill{ font-size:10.5px; font-weight:700; letter-spacing:.06em; text-transform:uppercase;
+    padding:4px 9px; border-radius:20px; border:1px solid transparent; }
+
+  /* Viewer */
+  .views{ display:grid; grid-template-columns:1fr 1fr; gap:12px; }
+  @media (max-width:520px){ .views{ grid-template-columns:1fr; } }
+  .viewbox{ background:var(--panel2); border:1px solid var(--line); border-radius:11px;
+    position:relative; overflow:hidden; }
+  .viewbox .lbl{ position:absolute; top:9px; left:11px; font-size:10px; letter-spacing:.1em;
+    text-transform:uppercase; color:var(--muted); font-weight:700; z-index:2; }
+  .viewbox .sub{ position:absolute; top:9px; right:11px; font-size:10px; color:var(--faint); z-index:2;}
+  canvas{ display:block; width:100%; height:260px; }
+  .transport{ display:flex; align-items:center; gap:12px; margin-top:14px; }
+  .playbtn{ width:38px;height:38px;border-radius:9px;border:1px solid var(--line);
+    background:var(--panel2); color:var(--text); cursor:pointer; font-size:15px; flex:none; }
+  .scrub{ position:relative; flex:1; height:34px; }
+  .scrub input{ width:100%; margin:0; position:relative; z-index:3; accent-color:var(--accent); }
+  .marks{ position:absolute; left:0; right:0; top:22px; height:12px; }
+  .mark{ position:absolute; transform:translateX(-50%); font-size:9px; color:var(--faint);
+    white-space:nowrap; }
+  .mark::before{ content:""; display:block; width:1px; height:6px; background:var(--faint);
+    margin:0 auto 2px; }
+  .frameno{ font-family:var(--mono); font-size:12px; color:var(--muted); min-width:78px;
+    text-align:right; }
+
+  /* Risk gauge */
+  .gauge{ display:flex; align-items:center; gap:16px; }
+  .ring{ position:relative; width:104px; height:104px; flex:none; }
+  .ring svg{ transform:rotate(-90deg); }
+  .ring .num{ position:absolute; inset:0; display:grid; place-content:center; text-align:center; }
+  .ring .num b{ font-size:26px; font-family:var(--mono); letter-spacing:-.02em; }
+  .ring .num span{ font-size:10px; color:var(--muted); }
+  .risklabel{ font-size:20px; font-weight:700; letter-spacing:-.01em; }
+  .risklabel small{ display:block; font-size:12px; font-weight:500; color:var(--muted);
+    letter-spacing:0; margin-top:3px; max-width:210px; }
+
+  /* Metric cards */
+  .metrics{ display:grid; grid-template-columns:1fr 1fr; gap:10px; margin-top:6px; }
+  .metric{ background:var(--panel2); border:1px solid var(--line); border-radius:11px; padding:12px 13px; }
+  .metric .k{ font-size:10px; letter-spacing:.08em; text-transform:uppercase; color:var(--muted);
+    font-weight:700; }
+  .metric .v{ font-size:23px; font-family:var(--mono); letter-spacing:-.02em; margin:5px 0 4px; }
+  .metric .st{ display:flex; align-items:center; gap:5px; font-size:11px; font-weight:600; }
+  .metric .thr{ font-size:10.5px; color:var(--faint); font-family:var(--mono); }
+
+  /* LESS list */
+  .less{ display:flex; flex-direction:column; gap:1px; }
+  .less .row{ display:flex; align-items:center; gap:10px; padding:9px 4px;
+    border-bottom:1px solid var(--line); }
+  .less .row:last-child{ border-bottom:0; }
+  .less .ic{ width:16px;height:16px;border-radius:50%; flex:none; display:grid;place-items:center;
+    font-size:10px; font-weight:800; }
+  .less .desc{ flex:1; font-size:12.5px; }
+  .less .val{ font-family:var(--mono); font-size:11px; color:var(--muted); }
+
+  /* Validation strip */
+  .valgrid{ display:grid; grid-template-columns:repeat(4,1fr); gap:14px; }
+  @media (max-width:820px){ .valgrid{ grid-template-columns:1fr 1fr; } }
+  .stat{ }
+  .stat .big{ font-size:24px; font-family:var(--mono); letter-spacing:-.02em; }
+  .stat .big.good{ color:var(--good); }
+  .stat .cap{ font-size:11px; color:var(--muted); margin-top:2px; }
+  table.orient{ width:100%; border-collapse:collapse; font-size:12px; margin-top:6px; }
+  table.orient th, table.orient td{ text-align:right; padding:6px 8px; font-family:var(--mono);
+    border-bottom:1px solid var(--line); }
+  table.orient th{ color:var(--muted); font-weight:600; font-family:var(--sans); font-size:11px;
+    text-transform:uppercase; letter-spacing:.06em; }
+  table.orient td:first-child, table.orient th:first-child{ text-align:left; }
+  .win{ color:var(--good); } .lose{ color:var(--bad); }
+  .note{ font-size:12px; color:var(--muted); line-height:1.5; }
+  .note b{ color:var(--text); }
+  .badge{ display:inline-block; font-size:10px; font-weight:700; letter-spacing:.05em;
+    padding:2px 7px; border-radius:5px; text-transform:uppercase; }
+  .badge.proven{ color:var(--good); background:color-mix(in srgb,var(--good) 15%,transparent); }
+  .badge.pending{ color:var(--warn); background:color-mix(in srgb,var(--warn) 15%,transparent); }
+  .sectitle{ font-size:12px; letter-spacing:.11em; text-transform:uppercase; color:var(--muted);
+    font-weight:700; margin:34px 0 12px; display:flex; align-items:center; gap:10px; }
+  .sectitle::after{ content:""; flex:1; height:1px; background:var(--line); }
+  .loading{ color:var(--muted); font-size:13px; padding:30px; text-align:center; }
+  #app{ transition:opacity .15s ease; }
+  #app.busy{ opacity:.45; pointer-events:none; }
+  .toast{ position:fixed; top:16px; left:50%; transform:translateX(-50%);
+    background:var(--panel); border:1px solid var(--line); box-shadow:var(--shadow);
+    padding:8px 16px; border-radius:9px; font-size:12.5px; color:var(--muted);
+    display:flex; align-items:center; gap:9px; opacity:0; transition:opacity .15s; z-index:20; }
+  .toast.show{ opacity:1; }
+  .toast .spin{ width:12px;height:12px;border-radius:50%; border:2px solid var(--line);
+    border-top-color:var(--accent); animation:spin .7s linear infinite; }
+  @keyframes spin{ to{ transform:rotate(360deg); } }
+  @media (prefers-reduced-motion: reduce){ .toast .spin{ animation:none; } #app{ transition:none; } }
+
+  /* ── Live panel ── */
+  #live-panel{ display:none; }
+  #live-panel.active{ display:block; }
+  .live-setup{ display:grid; grid-template-columns:1fr 1fr; gap:14px; margin-bottom:18px; }
+  @media(max-width:640px){ .live-setup{ grid-template-columns:1fr; } }
+  .live-setup label{ font-size:11px; letter-spacing:.07em; text-transform:uppercase;
+    color:var(--muted); font-weight:700; display:block; margin-bottom:5px; }
+  .live-setup input{ width:100%; font:inherit; font-size:13px; padding:8px 10px;
+    border:1px solid var(--line); border-radius:7px; background:var(--panel2);
+    color:var(--text); outline:none; }
+  .live-setup input:focus{ border-color:var(--accent); }
+  .livebtn{ font:inherit; font-size:13px; font-weight:700; cursor:pointer; border:0;
+    padding:10px 22px; border-radius:8px; }
+  .livebtn.start{ background:var(--accent); color:#fff; }
+  .livebtn.stop{ background:color-mix(in srgb,var(--bad) 18%,transparent);
+    color:var(--bad); border:1px solid var(--bad); }
+  .cam-dots{ display:flex; gap:6px; align-items:center; }
+  .cam-dot{ width:8px;height:8px;border-radius:50%;background:var(--faint);
+    transition:background .2s; }
+  .cam-dot.ok{ background:var(--good);box-shadow:0 0 0 3px color-mix(in srgb,var(--good) 22%,transparent); }
+  .live-state{ font-size:11px; font-weight:700; letter-spacing:.08em; text-transform:uppercase; }
+  .live-state.IDLE{ color:var(--muted); }
+  .live-state.FALLING{ color:var(--warn); }
+  .live-state.RECOVERING{ color:var(--accent); }
+  .rep-count{ font-size:13px; color:var(--muted); }
+  .rep-count b{ color:var(--text); font-family:var(--mono); }
+  .live-row{ display:flex; align-items:center; gap:14px; padding:12px 0;
+    border-bottom:1px solid var(--line); flex-wrap:wrap; }
+  .live-row:last-child{ border-bottom:0; }
+  .hipbar{ flex:1; height:6px; border-radius:3px; background:var(--panel2);
+    overflow:hidden; min-width:80px; }
+  .hipbar-fill{ height:100%; background:var(--accent2); border-radius:3px;
+    transition:width .1s linear; }
+</style>
+</head>
+<body>
+<h2 class="sr-only">LANDR Studio dashboard: multi-camera 3D landing analysis with a validated-geometry panel.</h2>
+<div class="wrap">
+  <header>
+    <div class="brand">
+      <b>LANDR <span class="studio">Studio</span></b>
+      <span class="tag">Multi-camera 3D</span>
+    </div>
+    <div class="spacer"></div>
+    <div class="rigstat"><span class="dot"></span><span id="rigtxt">4 cameras · synced</span></div>
+    <div class="seg" id="modeseg">
+      <button data-mode="demo" class="active">Demo</button>
+      <button data-mode="live">Live</button>
+    </div>
+    <div class="seg" id="sel">
+      <button data-p="good" class="active">A. Rivera</button>
+      <button data-p="at_risk">J. Okafor</button>
+    </div>
+    <button id="printbtn" title="Open printable PDF report in new tab"
+      style="font:inherit;font-size:12px;font-weight:600;cursor:pointer;
+             padding:7px 14px;border-radius:8px;border:1px solid var(--line);
+             background:var(--panel2);color:var(--text);white-space:nowrap;">
+      Print Report
+    </button>
+    <button class="iconbtn" id="theme" title="Toggle theme">◐</button>
+  </header>
+
+  <div id="app">
+    <div class="grid">
+      <!-- LEFT: reconstruction -->
+      <div class="card">
+        <div class="hd"><h2>3D Reconstruction</h2>
+          <span class="spacer"></span>
+          <span class="sub" id="reconconf" style="font-size:11px;color:var(--muted)"></span>
+        </div>
+        <div class="bd">
+          <div class="views">
+            <div class="viewbox">
+              <span class="lbl">Frontal · valgus</span><span class="sub">medio-lateral × up</span>
+              <canvas id="cFront"></canvas>
+            </div>
+            <div class="viewbox">
+              <span class="lbl">Sagittal · flexion</span><span class="sub">anterior × up</span>
+              <canvas id="cSide"></canvas>
+            </div>
+          </div>
+          <div class="transport">
+            <button class="playbtn" id="play">▶</button>
+            <div class="scrub">
+              <input type="range" id="range" min="0" max="0" value="0" step="1" />
+              <div class="marks" id="marks"></div>
+            </div>
+            <div class="frameno" id="frameno">0.00 s</div>
+          </div>
+        </div>
+      </div>
+
+      <!-- RIGHT: risk + metrics -->
+      <div style="display:flex;flex-direction:column;gap:18px;">
+        <div class="card">
+          <div class="hd"><h2>ACL Risk</h2></div>
+          <div class="bd">
+            <div class="athlete">
+              <div class="avatar" id="ava">AR</div>
+              <div>
+                <div class="name" id="aname">—</div>
+                <div class="sub" id="asub">—</div>
+              </div>
+              <span class="spacer"></span>
+              <span class="pill" id="rpill">—</span>
+            </div>
+            <div class="gauge">
+              <div class="ring">
+                <svg width="104" height="104" viewBox="0 0 104 104">
+                  <circle cx="52" cy="52" r="45" fill="none" stroke="var(--line)" stroke-width="9"/>
+                  <circle id="arc" cx="52" cy="52" r="45" fill="none" stroke="var(--accent)"
+                    stroke-width="9" stroke-linecap="round" stroke-dasharray="283" stroke-dashoffset="283"/>
+                </svg>
+                <div class="num"><b id="score">—</b><span>/ 100</span></div>
+              </div>
+              <div>
+                <div class="risklabel" id="rlabel">—<small id="rrat"></small></div>
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <div class="card">
+          <div class="hd"><h2>Key Metrics</h2></div>
+          <div class="bd">
+            <div class="metrics" id="metrics"></div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- LESS -->
+    <div class="card" style="margin-top:18px;">
+      <div class="hd"><h2>Landing Error Scoring System</h2>
+        <span class="spacer"></span>
+        <span class="sub" id="lesstotal" style="font-size:12px;color:var(--muted);"></span>
+      </div>
+      <div class="bd"><div class="less" id="less"></div></div>
+    </div>
+
+    <!-- LIVE PANEL -->
+    <div id="live-panel">
+      <div class="card" style="margin-top:18px;">
+        <div class="hd">
+          <h2>Live Capture</h2>
+          <span class="spacer"></span>
+          <div class="cam-dots" id="camdots"></div>
+          <span class="live-state IDLE" id="livestate">Idle</span>
+        </div>
+        <div class="bd">
+          <div class="live-setup">
+            <div>
+              <label>Camera sources (comma-separated indices or RTSP URLs)</label>
+              <input id="lsources" value="0,1,2,3" placeholder="0,1,2,3 or rtsp://…" />
+            </div>
+            <div>
+              <label>Athlete name</label>
+              <input id="lathlete" value="" placeholder="Name" />
+            </div>
+            <div>
+              <label>GPU backend</label>
+              <input id="ldevice" value="cpu" placeholder="cpu or dml (DirectML for RX 6600)" />
+            </div>
+            <div style="display:flex;align-items:flex-end;gap:10px;">
+              <button class="livebtn start" id="lstart">Connect &amp; Start</button>
+              <button class="livebtn stop" id="lstop" style="display:none;">Stop</button>
+            </div>
+          </div>
+          <div class="live-row">
+            <span style="font-size:12px;color:var(--muted);min-width:64px;">Hip height</span>
+            <div class="hipbar"><div class="hipbar-fill" id="hipfill" style="width:0%"></div></div>
+            <span class="rep-count">Reps: <b id="repcount">0</b></span>
+          </div>
+          <div id="livelog" style="font-size:12px;color:var(--muted);margin-top:10px;
+            max-height:80px;overflow-y:auto;font-family:var(--mono);"></div>
+        </div>
+      </div>
+    </div>
+
+    <!-- VALIDATION -->
+    <div class="sectitle">Validated Geometry</div>
+    <div class="card">
+      <div class="hd">
+        <h2>Pipeline accuracy</h2>
+        <span class="badge proven" style="margin-left:4px;">Proven</span>
+        <span class="spacer"></span>
+        <span class="sub" style="font-size:11px;color:var(--faint);">python -m studio.selftest</span>
+      </div>
+      <div class="bd">
+        <div id="valbody" class="loading">Running geometry self-test…</div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<script>
+const RISK = { low:{c:'var(--good)',t:'LOW RISK'}, moderate:{c:'var(--warn)',t:'MODERATE'},
+               high:{c:'var(--bad)',t:'HIGH RISK'} };
+let DATA=null, frame=0, playing=false, raf=null, bounds=null;
+
+const $ = s => document.querySelector(s);
+let _toastEl=null;
+function toast(show){
+  if(!_toastEl){ _toastEl=document.createElement('div'); _toastEl.className='toast';
+    _toastEl.innerHTML='<span class="spin"></span><span>Reconstructing capture…</span>';
+    document.body.appendChild(_toastEl); }
+  _toastEl.classList.toggle('show', show);
+}
+
+// ---- theme ----
+$('#theme').onclick = () => {
+  const cur = document.documentElement.getAttribute('data-theme')
+    || (matchMedia('(prefers-color-scheme: dark)').matches ? 'dark':'light');
+  document.documentElement.setAttribute('data-theme', cur==='dark'?'light':'dark');
+  if (DATA) render(frame);
+};
+
+// ---- data load ----
+async function load(profile){
+  stopPlay();
+  $('#app').classList.add('busy'); toast(true);
+  const r = await fetch('/api/demo?profile='+profile);
+  DATA = await r.json();
+  $('#app').classList.remove('busy'); toast(false);
+  frame = 0;
+  buildScene();
+  fillPanels();
+  // Paint the first frame synchronously (do NOT depend on rAF, which browsers
+  // throttle in a background/preview tab). Playback is user-initiated.
+  requestAnimationFrame(()=>render(0));
+  render(0);
+}
+// ---- profile selector ----
+let _currentProfile = 'good';
+$('#sel').addEventListener('click', e=>{
+  const b = e.target.closest('button'); if(!b) return;
+  [...$('#sel').children].forEach(x=>x.classList.toggle('active', x===b));
+  _currentProfile = b.dataset.p;
+  load(_currentProfile);
+});
+
+// ---- print report ----
+$('#printbtn').onclick = () => {
+  window.open('/report?profile=' + _currentProfile, '_blank');
+};
+
+// ── Mode toggle (Demo / Live) ──────────────────────────────────────────────
+let _mode = 'demo';
+$('#modeseg').addEventListener('click', e => {
+  const b = e.target.closest('button'); if (!b) return;
+  [...$('#modeseg').children].forEach(x => x.classList.toggle('active', x === b));
+  _mode = b.dataset.mode;
+  $('#sel').style.display        = _mode === 'demo' ? '' : 'none';
+  $('#printbtn').style.display   = _mode === 'demo' ? '' : 'none';
+  $('#live-panel').classList.toggle('active', _mode === 'live');
+});
+
+// ── Live WebSocket ─────────────────────────────────────────────────────────
+let _ws = null, _repCount = 0, _hipBaseline = null;
+
+function llog(msg) {
+  const el = $('#livelog');
+  el.textContent = msg + '\n' + el.textContent.slice(0, 400);
+}
+
+function parseSources(str) {
+  return str.split(',').map(s => s.trim()).map(s => isNaN(s) ? s : parseInt(s, 10));
+}
+
+function updateCamDots(ok_arr) {
+  const el = $('#camdots');
+  while (el.children.length < ok_arr.length) {
+    const d = document.createElement('div'); d.className = 'cam-dot'; el.appendChild(d);
+  }
+  ok_arr.forEach((ok, i) => el.children[i].classList.toggle('ok', ok));
+}
+
+function onLiveFrame(msg) {
+  // State badge
+  const st = $('#livestate');
+  st.textContent = msg.state;
+  st.className = 'live-state ' + msg.state;
+
+  // Camera dots
+  if (msg.cameras_ok) updateCamDots(msg.cameras_ok);
+
+  // Hip height bar (normalize to a sensible range ~0.5–1.5 m, show as % fill)
+  const hy = msg.hip_y;
+  if (_hipBaseline === null) _hipBaseline = hy;
+  _hipBaseline = 0.99 * _hipBaseline + 0.01 * Math.max(hy, _hipBaseline);
+  const pct = Math.max(0, Math.min(100, (hy / (_hipBaseline || 1)) * 75));
+  $('#hipfill').style.width = pct + '%';
+}
+
+function onLiveRep(msg) {
+  _repCount++;
+  $('#repcount').textContent = _repCount;
+  llog('Rep ' + _repCount + ' complete → ' + (msg.result.risk?.category || '?').toUpperCase()
+    + ' (' + (msg.result.risk?.score_0_100 ?? '—') + '/100)');
+
+  // Patch DATA with the live result so the right panel updates automatically.
+  DATA = msg.result;
+  fillPanels();
+}
+
+function connectLive() {
+  if (_ws) { _ws.close(); _ws = null; }
+  const sources = parseSources($('#lsources').value || '0');
+  const athlete = $('#lathlete').value.trim();
+  const device  = $('#ldevice').value.trim() || 'cpu';
+
+  // Rig is required — use the demo arc rig as a default via the API.
+  // In a real deployment the caller would supply their calibrated rig JSON.
+  fetch('/api/demo?profile=good')
+    .then(r => r.json())
+    .then(d => {
+      const wsProto = location.protocol === 'https:' ? 'wss' : 'ws';
+      _ws = new WebSocket(wsProto + '://' + location.host + '/ws/live');
+
+      _ws.onopen = () => {
+        llog('WebSocket connected. Starting cameras…');
+        // Send start command — rig comes from the demo for now; replace with
+        // a real calibration file for actual multi-camera setups.
+        _ws.send(JSON.stringify({
+          action: 'start',
+          sources,
+          rig: d.meta?.rig || null,   // populated by /api/demo if rig is embedded
+          athlete: { name: athlete },
+          device,
+        }));
+      };
+
+      _ws.onmessage = ev => {
+        let msg; try { msg = JSON.parse(ev.data); } catch { return; }
+        if (msg.type === 'frame')  onLiveFrame(msg);
+        else if (msg.type === 'rep') onLiveRep(msg);
+        else if (msg.type === 'status') llog('Session ' + (msg.running ? 'started' : 'stopped'));
+        else if (msg.type === 'error')  llog('ERROR: ' + msg.message);
+      };
+
+      _ws.onclose = () => {
+        llog('WebSocket closed.');
+        $('#lstart').style.display = '';
+        $('#lstop').style.display  = 'none';
+        $('#livestate').textContent = 'Idle';
+        $('#livestate').className   = 'live-state IDLE';
+      };
+    });
+
+  $('#lstart').style.display = 'none';
+  $('#lstop').style.display  = '';
+  llog('Connecting to cameras: ' + sources.join(', ') + ' (device: ' + device + ')…');
+}
+
+function disconnectLive() {
+  if (_ws) { _ws.send(JSON.stringify({action:'stop'})); _ws.close(); _ws = null; }
+  $('#lstart').style.display = '';
+  $('#lstop').style.display  = 'none';
+}
+
+$('#lstart').onclick = connectLive;
+$('#lstop').onclick  = disconnectLive;
+
+// ---- scene geometry ----
+const BONES = [
+  ['nose','l_shoulder'],['nose','r_shoulder'],['l_shoulder','r_shoulder'],
+  ['l_hip','r_hip'],['l_shoulder','l_hip'],['r_shoulder','r_hip'],
+  ['l_hip','l_knee'],['l_knee','l_ankle'],['l_ankle','l_foot'],
+  ['r_hip','r_knee'],['r_knee','r_ankle'],['r_ankle','r_foot'],
+];
+function sk(){ return DATA.meta.skeleton_3d; }
+function nFrames(){ return sk().l_hip.length; }
+
+function buildScene(){
+  const s = sk();
+  const joints = Object.keys(s).filter(k=>Array.isArray(s[k]));
+  let minX=1e9,maxX=-1e9,minY=1e9,maxY=-1e9,minZ=1e9,maxZ=-1e9;
+  for(const j of joints){ for(const p of s[j]){
+    minX=Math.min(minX,p[0]);maxX=Math.max(maxX,p[0]);
+    minY=Math.min(minY,p[1]);maxY=Math.max(maxY,p[1]);
+    minZ=Math.min(minZ,p[2]);maxZ=Math.max(maxZ,p[2]);
+  }}
+  bounds={minX,maxX,minY,maxY,minZ,maxZ};
+  const rng=$('#range'); rng.max=nFrames()-1; rng.value=0;
+  // event marks
+  const ev=DATA.events, fps=s.fps, marks=$('#marks'); marks.innerHTML='';
+  const add=(f,txt)=>{ const d=document.createElement('div'); d.className='mark';
+    d.style.left=(100*f/(nFrames()-1))+'%'; d.textContent=txt; marks.appendChild(d); };
+  add(ev.initial_contact,'contact'); add(ev.lowest_point,'lowest');
+}
+
+function setupCanvas(cv){
+  const dpr=devicePixelRatio||1, r=cv.getBoundingClientRect();
+  cv.width=r.width*dpr; cv.height=r.height*dpr;
+  const ctx=cv.getContext('2d'); ctx.setTransform(dpr,0,0,dpr,0,0);
+  return {ctx,w:r.width,h:r.height};
+}
+// shared metres->px scale so both views share true proportions
+function scaleFor(w,h){
+  const spanY=bounds.maxY-bounds.minY;
+  const spanX=Math.max(bounds.maxX-bounds.minX, bounds.maxZ-bounds.minZ);
+  const pad=28;
+  return Math.min((h-pad*2)/spanY, (w-pad*2)/Math.max(spanX,0.6));
+}
+function drawView(cv, axisH){ // axisH: 0=x(frontal), 2=z(sagittal)
+  const {ctx,w,h}=setupCanvas(cv);
+  ctx.clearRect(0,0,w,h);
+  const s=sk(), sc=scaleFor(w,h);
+  const cH=(bounds['min'+(axisH===0?'X':'Z')]+bounds['max'+(axisH===0?'X':'Z')])/2;
+  const cY=(bounds.minY+bounds.maxY)/2;
+  const toPx=p=>[ w/2 + (p[axisH]-cH)*sc, h/2 - (p[1]-cY)*sc ];
+  // ground line
+  const gy=h/2 - (bounds.minY-cY)*sc;
+  ctx.strokeStyle=getVar('--line'); ctx.lineWidth=1;
+  ctx.beginPath(); ctx.moveTo(10,gy); ctx.lineTo(w-10,gy); ctx.stroke();
+
+  const P={}; for(const j of Object.keys(s)) if(Array.isArray(s[j])) P[j]=toPx(s[j][frame]);
+
+  // frontal: draw hip->ankle reference + valgus deviation at knee
+  if(axisH===0){
+    for(const side of ['l','r']){
+      const hip=P[side+'_hip'], ank=P[side+'_ankle'], knee=P[side+'_knee'];
+      ctx.strokeStyle=getVar('--faint'); ctx.setLineDash([3,3]); ctx.lineWidth=1;
+      ctx.beginPath(); ctx.moveTo(hip[0],hip[1]); ctx.lineTo(ank[0],ank[1]); ctx.stroke();
+      ctx.setLineDash([]);
+    }
+  }
+  // bones
+  ctx.lineWidth=3; ctx.lineCap='round'; ctx.strokeStyle=getVar('--accent');
+  for(const [a,b] of BONES){ if(!P[a]||!P[b])continue;
+    ctx.beginPath(); ctx.moveTo(P[a][0],P[a][1]); ctx.lineTo(P[b][0],P[b][1]); ctx.stroke(); }
+  // joints
+  for(const j of Object.keys(P)){
+    const isKnee=j.endsWith('knee');
+    ctx.fillStyle=isKnee?getVar('--accent2'):getVar('--text');
+    ctx.beginPath(); ctx.arc(P[j][0],P[j][1], isKnee?4.5:3, 0, 7); ctx.fill();
+  }
+}
+function getVar(n){ return getComputedStyle(document.documentElement).getPropertyValue(n).trim(); }
+
+function render(f){
+  frame=f;
+  drawView($('#cFront'),0);
+  drawView($('#cSide'),2);
+  const fps=sk().fps;
+  $('#frameno').textContent=(f/fps).toFixed(2)+' s';
+  $('#range').value=f;
+}
+$('#range').addEventListener('input',e=>{ stopPlay(); render(+e.target.value); });
+
+// ---- playback ----
+function startPlay(){ playing=true; $('#play').textContent='❚❚'; loop(); }
+function stopPlay(){ playing=false; $('#play').textContent='▶'; if(raf)cancelAnimationFrame(raf); }
+$('#play').onclick=()=> playing?stopPlay():startPlay();
+let last=0;
+function loop(t){
+  if(!playing)return;
+  const fps=sk().fps;
+  if(t-last > 1000/fps){ last=t; frame=(frame+1)%nFrames(); render(frame); }
+  raf=requestAnimationFrame(loop);
+}
+
+// ---- panels ----
+function fillPanels(){
+  const m=DATA.metrics, risk=DATA.risk, ath=DATA.meta.athlete||{};
+  const rk=RISK[risk.category]||RISK.low;
+  $('#aname').textContent=ath.name||'Athlete';
+  $('#asub').textContent=(ath.sport||'')+(ath.id?' · '+ath.id:'');
+  $('#ava').textContent=(ath.name||'A').split(' ').map(x=>x[0]).join('').slice(0,2);
+  $('#reconconf').textContent='reconstruction conf '+(DATA.meta.reconstruction_confidence*100||0).toFixed(0)+'%'
+    +' · '+(DATA.meta.n_views||4)+' views';
+  const pill=$('#rpill'); pill.textContent=rk.t; pill.style.color=rk.c;
+  pill.style.borderColor=rk.c; pill.style.background='color-mix(in srgb,'+rk.c+' 14%,transparent)';
+  // gauge
+  $('#score').textContent=Math.round(risk.score_0_100);
+  const arc=$('#arc'); arc.style.stroke=rk.c;
+  arc.style.strokeDashoffset=283*(1-risk.score_0_100/100);
+  $('#rlabel').innerHTML=rk.t+'<small>'+bandText(risk)+'</small>';
+  $('#rlabel').style.color=rk.c;
+  // metrics
+  const ic=m.at_initial_contact, low=m.at_lowest_point;
+  const peakV=Math.max(Math.abs(m.peak_valgus_deg.left),Math.abs(m.peak_valgus_deg.right));
+  const cards=[
+    metricCard('Knee flexion @ contact', ic.knee_flexion_deg, '°', v=>v>=30, '≥ 30° soft'),
+    metricCard('Peak knee valgus', peakV, '°', v=>v<10, '< 10° safe'),
+    metricCard('Asymmetry index', m.asymmetry_index*100, '%', v=>v<15, '< 15% balanced'),
+    metricCard('Energy absorption', m.knee_flexion_displacement_deg, '°', v=>v>=45, '≥ 45° range'),
+  ];
+  $('#metrics').innerHTML=cards.join('');
+  // LESS
+  $('#lesstotal').textContent=DATA.less.total+' / 8 errors';
+  $('#less').innerHTML=DATA.less.items.map(it=>{
+    const bad=it.error;
+    return `<div class="row">
+      <span class="ic" style="background:${bad?'color-mix(in srgb,var(--bad) 20%,transparent)':'color-mix(in srgb,var(--good) 18%,transparent)'};
+        color:${bad?'var(--bad)':'var(--good)'}">${bad?'!':'✓'}</span>
+      <span class="desc">${it.description}</span>
+      <span class="val">${it.detail||''}</span></div>`;
+  }).join('');
+}
+function bandText(r){ return r.category==='high'
+  ? 'Multiple landing errors — prioritise neuromuscular retraining.'
+  : r.category==='moderate' ? 'Some errors present — monitor and reassess.'
+  : 'Mechanics within safe ranges.'; }
+function metricCard(k,val,unit,ok,thr){
+  const good=ok(val); const col=good?'var(--good)':'var(--bad)';
+  return `<div class="metric">
+    <div class="k">${k}</div>
+    <div class="v">${val.toFixed(unit==='%'?1:1)}${unit}</div>
+    <div class="st" style="color:${col}">
+      <span>${good?'✓':'▲'}</span><span>${good?'in range':'outside range'}</span>
+      <span class="spacer" style="flex:1"></span><span class="thr">${thr}</span>
+    </div></div>`;
+}
+
+// ---- validation panel ----
+async function loadVal(){
+  try{
+    const r=await fetch('/api/selftest'); const v=await r.json();
+    const c=v.checks, clean=c.clean, n1=c.noise_1px;
+    const orient=v.orientation;
+    const rows=orient.map(o=>`<tr>
+      <td>${o.yaw_deg}°</td><td>${o.true_peak_valgus.toFixed(1)}</td>
+      <td class="win">${o.studio_err.toFixed(2)}</td>
+      <td class="lose">${o.single_cam_err.toFixed(2)}</td></tr>`).join('');
+    $('#valbody').classList.remove('loading');
+    $('#valbody').innerHTML=`
+      <div class="valgrid">
+        <div class="stat"><div class="big good">${clean.recon_mm.toFixed(2)} mm</div>
+          <div class="cap">3D reconstruction error, clean 2D — <b style="color:var(--text)">exact</b></div></div>
+        <div class="stat"><div class="big">${n1.recon_mm.toFixed(1)} mm</div>
+          <div class="cap">3D error at 1&nbsp;px detector noise</div></div>
+        <div class="stat"><div class="big">${n1.flexion_ic_err.toFixed(2)}° / ${n1.valgus_ic_err.toFixed(2)}°</div>
+          <div class="cap">flexion / valgus recovery @ 1&nbsp;px</div></div>
+        <div class="stat"><div class="big good">${v.multiperson.correct?'✓':'✗'}</div>
+          <div class="cap">multi-person association (${v.rig_cameras} cams)</div></div>
+      </div>
+      <div style="display:grid;grid-template-columns:1fr 1fr;gap:22px;margin-top:20px;">
+        <div>
+          <div style="font-size:11px;text-transform:uppercase;letter-spacing:.08em;color:var(--muted);font-weight:700;margin-bottom:4px;">Orientation invariance — peak-valgus error (°)</div>
+          <table class="orient">
+            <tr><th>yaw</th><th>true</th><th>Studio 3D</th><th>1 camera</th></tr>
+            ${rows}
+          </table>
+        </div>
+        <div class="note">
+          <p style="margin:0 0 10px;"><b>What this proves.</b> Projecting a known 3D skeleton into ${v.rig_cameras} calibrated cameras and triangulating it back recovers the joints <b>exactly</b> with clean keypoints, and to a few&nbsp;mm under detector noise. Knee angles come back to a fraction of a degree.</p>
+          <p style="margin:0 0 10px;">As the athlete turns away from the cameras, a <b>single 2D view</b>'s valgus error explodes (right column) while <b>Studio's 3D stays flat</b> (left) — the reason a motion-camera rig exists.</p>
+          <p style="margin:0;"><span class="badge pending">Pending</span> &nbsp;Real-world accuracy vs marker mocap needs live multi-camera capture; the geometry above is what's proven today.</p>
+        </div>
+      </div>`;
+  }catch(e){ $('#valbody').textContent='Self-test unavailable: '+e; }
+}
+
+// init
+(function init(){
+  if(matchMedia('(prefers-color-scheme: dark)').matches===false)
+    document.documentElement.setAttribute('data-theme','light');
+  load('good'); loadVal();
+  addEventListener('resize', ()=>{ if(DATA) render(frame); });
+})();
+</script>
+</body>
+</html>

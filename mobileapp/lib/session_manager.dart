@@ -27,6 +27,40 @@ const List<String> kLessAllKeys = [
 
 double _bell(double t) => math.exp(-math.pow(t - 0.5, 2) / (2 * 0.035));
 
+/// Within-athlete measurement precision (RMSE, degrees), from LANDR's lab-mocap
+/// validation (OpenCap, held-out subjects). Because each athlete is compared to
+/// their OWN history, the per-athlete offset cancels and these are the numbers
+/// that govern trend detection. A change smaller than this is measurement noise,
+/// NOT real buildup — the trend logic below refuses to flag inside this band so
+/// the app never cries wolf on a wiggle.
+const double kValgusPrecisionDeg = 5.0;   // peak knee valgus (the #1 ACL predictor)
+const double kFlexionPrecisionDeg = 5.0;  // knee flexion at contact
+
+enum TrendStatus {
+  insufficient, // not enough prior sessions to establish a baseline
+  rising,       // moved in the injurious direction beyond measurement noise
+  stable,       // change within measurement noise
+  improving,    // moved in the protective direction beyond measurement noise
+}
+
+/// A metric's change for one session vs the athlete's own prior baseline.
+class MetricTrend {
+  final double? baseline; // median of the athlete's sessions BEFORE this one
+  final double? current;
+  final TrendStatus status;
+  const MetricTrend({this.baseline, this.current, required this.status});
+
+  double? get delta =>
+      (baseline != null && current != null) ? current! - baseline! : null;
+}
+
+double? _median(List<double> xs) {
+  if (xs.isEmpty) return null;
+  final s = [...xs]..sort();
+  final n = s.length;
+  return n.isOdd ? s[n ~/ 2] : (s[n ~/ 2 - 1] + s[n ~/ 2]) / 2.0;
+}
+
 class JumpSession {
   final String title;
   final String date;
@@ -42,6 +76,7 @@ class JumpSession {
   final double trunkFlexion;      // Trunk lean at initial contact (degrees)
   final double energyAbsorption;  // Knee flexion displacement / absorption range (degrees)
   final List<String> lessErrors;  // LESS criterion keys that flagged as errors
+  final bool isDemo;              // true = hand-authored placeholder; false = measured by the engine
 
   JumpSession({
     required this.title,
@@ -56,6 +91,7 @@ class JumpSession {
     this.trunkFlexion = 0.0,
     this.energyAbsorption = 0.0,
     this.lessErrors = const [],
+    this.isDemo = true,
   });
 
   // ── Visualization helpers (drive the procedural skeleton / charts) ─────────
@@ -152,6 +188,7 @@ class JumpSession {
       trunkFlexion: trunkFlexion,
       energyAbsorption: energyAbsorption,
       lessErrors: errors,
+      isDemo: false, // came from the engine analysing a real clip
     );
   }
 }
@@ -181,6 +218,41 @@ class Athlete {
       '${firstName.isNotEmpty ? firstName[0] : ''}${lastName.isNotEmpty ? lastName[0] : ''}'.toUpperCase();
   bool get screened => sessions.isNotEmpty;
   JumpSession? get latest => sessions.isEmpty ? null : sessions.last;
+
+  /// Trend of [metric] for session [s] vs this athlete's baseline (the median of
+  /// their sessions BEFORE [s]). This is the ACL-BUILDUP signal: comparing an
+  /// athlete to their own history cancels their fixed per-athlete offset, so the
+  /// change is measured at ~precision (see [kValgusPrecisionDeg]). Changes within
+  /// that band are reported as [TrendStatus.stable] rather than false alarms.
+  ///
+  /// [higherIsWorse]: true for valgus (more cave = worse), false for knee flexion
+  /// at contact (less flexion = stiffer landing = worse).
+  MetricTrend trendAt(
+    JumpSession s,
+    double Function(JumpSession) metric,
+    double precision, {
+    bool higherIsWorse = true,
+  }) {
+    final i = sessions.indexOf(s);
+    if (i < 1) return const MetricTrend(status: TrendStatus.insufficient);
+    final baseline = _median(sessions.sublist(0, i).map(metric).toList());
+    final current = metric(s);
+    if (baseline == null) return const MetricTrend(status: TrendStatus.insufficient);
+    final d = current - baseline;
+    TrendStatus status;
+    if (d.abs() <= precision) {
+      status = TrendStatus.stable;
+    } else if ((d > 0) == higherIsWorse) {
+      status = TrendStatus.rising;
+    } else {
+      status = TrendStatus.improving;
+    }
+    return MetricTrend(baseline: baseline, current: current, status: status);
+  }
+
+  /// Peak-valgus buildup for [s] vs the athlete's own baseline (the ACL metric).
+  MetricTrend valgusTrendAt(JumpSession s) =>
+      trendAt(s, (x) => x.maxValgus, kValgusPrecisionDeg, higherIsWorse: true);
 }
 
 /// ── Roster (source of truth for athletes + active selection) ──────────────────
@@ -236,6 +308,22 @@ class RosterData {
           energyAbsorption: 30.0,
           lessErrors: ['knee_flexion_at_contact', 'knee_valgus_at_contact', 'peak_knee_valgus', 'knee_valgus_at_lowest', 'landing_asymmetry'],
         ),
+        // DEMO seed (fake, like the others) — illustrates the TRENDING UP buildup
+        // state: 16.9° is +5.3° over Maya's 11.6° baseline, past the 5° noise floor.
+        JumpSession(
+          title: "Landing Session #4",
+          date: "June 27, 2026",
+          riskFactor: "High Risk",
+          maxValgus: 16.9,
+          coachingCue: "Valgus spiked well beyond baseline under fatigue. Prioritise fatigue-resistant single-leg landings this week; re-screen in 3 days.",
+          asymmetryIndex: 0.094,
+          lessScore: 6,
+          riskScore: 74.0,
+          kneeFlexionIC: 13.8,
+          trunkFlexion: 8.0,
+          energyAbsorption: 27.0,
+          lessErrors: ['knee_flexion_at_contact', 'knee_valgus_at_contact', 'trunk_flexion_at_contact', 'peak_knee_valgus', 'knee_valgus_at_lowest', 'landing_asymmetry'],
+        ),
       ],
     ),
     Athlete(
@@ -284,6 +372,36 @@ class RosterData {
       ageCode: 'F15',
       accent: const Color(0xFF6B7280),
       sessions: [],
+    ),
+    // ── REAL data ─────────────────────────────────────────────────────────────
+    // Unlike every session above (hand-authored placeholders), this one was
+    // MEASURED by the LANDR engine: two-view analysis of a real drop-vertical-jump
+    // (OpenCap LabValidation, subject 08 / DJ1) — the same clip used to validate
+    // accuracy against motion capture. Numbers are the engine's actual output.
+    Athlete(
+      id: 'opencap08',
+      firstName: 'OpenCap',
+      lastName: 'Subject 08',
+      sport: 'Validated capture · real',
+      ageCode: 'LAB',
+      accent: const Color(0xFF16C2CE),
+      sessions: [
+        JumpSession(
+          title: "Drop-vertical-jump · DJ1",
+          date: "Analysed Jul 10, 2026",
+          riskFactor: "Low Risk",
+          maxValgus: 8.8,
+          coachingCue: "Engine-measured from real video. Deep, soft landing — 31° knee flexion at contact, 88° at lowest, valgus controlled (2° contact / 4° lowest). Even out minor left/right asymmetry.",
+          asymmetryIndex: 0.185,
+          lessScore: 1,
+          riskScore: 15.9,
+          kneeFlexionIC: 31.1,
+          trunkFlexion: 20.7,
+          energyAbsorption: 56.9,
+          lessErrors: ['landing_asymmetry'],
+          isDemo: false,
+        ),
+      ],
     ),
   ];
 

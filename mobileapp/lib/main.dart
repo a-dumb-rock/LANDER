@@ -6,6 +6,7 @@ import 'package:camera/camera.dart';
 import 'package:http/http.dart' as http;
 import 'package:image_picker/image_picker.dart';
 import 'package:fl_chart/fl_chart.dart';
+import 'config.dart';
 import 'session_detail_screen.dart';
 import 'session_manager.dart';
 import 'skeleton.dart';
@@ -573,7 +574,7 @@ class _CameraScreenState extends State<CameraScreen> {
   }
 
   Future<void> _uploadBothVideos(File front, File side) async {
-    final url = Uri.parse("http://192.168.0.162:8000/analyze-landing-two-view");
+    final url = Uri.parse("$kServerBaseUrl/analyze-landing-two-view");
     try {
       final request = http.MultipartRequest("POST", url)
         ..files.add(await http.MultipartFile.fromPath('front', front.path))
@@ -1032,7 +1033,12 @@ class _HistoryTile extends StatelessWidget {
               child: Column(
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
-                  Text(session.title, style: const TextStyle(fontWeight: FontWeight.w700, fontSize: 13.5, color: LColors.ink)),
+                  Row(children: [
+                    Flexible(child: Text(session.title, overflow: TextOverflow.ellipsis, style: const TextStyle(fontWeight: FontWeight.w700, fontSize: 13.5, color: LColors.ink))),
+                    const SizedBox(width: 7),
+                    if (session.isDemo) const OutlineChip('DEMO')
+                    else const OutlineChip('REAL', color: LColors.cyan),
+                  ]),
                   const SizedBox(height: 3),
                   Text('${session.date} · ${session.maxValgus.toStringAsFixed(1)}° · LESS ${session.lessScore}', style: const TextStyle(color: LColors.inkMid, fontSize: 11)),
                 ],

@@ -58,6 +58,8 @@ class SessionDetailScreen extends StatelessWidget {
                 ),
                 const SizedBox(width: 12),
                 Expanded(child: Text(session.title.toUpperCase(), style: const TextStyle(fontWeight: FontWeight.w800, fontSize: 13, letterSpacing: 1, color: LColors.ink))),
+                if (session.isDemo) ...[const OutlineChip('DEMO'), const SizedBox(width: 6)]
+                else ...[const OutlineChip('REAL', color: LColors.cyan), const SizedBox(width: 6)],
                 StatusPill(session.riskFactor.split(' ').first.toUpperCase(), LColors.risk(session.riskFactor)),
               ],
             ),
@@ -153,8 +155,8 @@ class SessionReport extends StatelessWidget {
           physics: const NeverScrollableScrollPhysics(),
           children: [
             _MetricCard(label: 'KNEE FLEXION @ CONTACT', value: session.kneeFlexionIC > 0 ? '${session.kneeFlexionIC.toStringAsFixed(2)}°' : '—', bad: session.kneeFlexionIC > 0 && session.kneeFlexionIC < 20.0),
-            _MetricCard(label: 'PEAK KNEE VALGUS', value: '${session.maxValgus.toStringAsFixed(2)}°', bad: session.maxValgus >= 5.0),
-            _MetricCard(label: 'ASYMMETRY INDEX', value: '${(session.asymmetryIndex * 100).toStringAsFixed(1)}%', bad: session.asymmetryIndex >= 0.07),
+            _MetricCard(label: 'PEAK KNEE VALGUS', value: '${session.maxValgus.toStringAsFixed(2)}°', bad: session.maxValgus >= 10.0),
+            _MetricCard(label: 'ASYMMETRY INDEX', value: '${(session.asymmetryIndex * 100).toStringAsFixed(1)}%', bad: session.asymmetryIndex >= 0.15),
             _MetricCard(label: 'ENERGY ABSORPTION', value: session.energyAbsorption > 0 ? '${session.energyAbsorption.toStringAsFixed(1)}°' : '—', bad: session.energyAbsorption > 0 && session.energyAbsorption < 35.0),
           ],
         ),
@@ -176,6 +178,9 @@ class SessionReport extends StatelessWidget {
         const SizedBox(height: 16),
         FatiguePillar(session: session),
         const SizedBox(height: 24),
+
+        // ── Buildup vs baseline (ACL trend interpreter) ───────────────
+        if (athlete != null) _ValgusBuildupCard(athlete: athlete!, session: session),
 
         // ── Trend ─────────────────────────────────────────────────────
         if (athlete != null && athlete!.sessions.length > 1) ...[
@@ -544,6 +549,102 @@ class _Trend extends StatelessWidget {
           ),
         ],
       ),
+    );
+  }
+}
+
+// ── Buildup vs baseline (ACL trend interpreter) ───────────────────────────────
+//
+// Compares this session's peak valgus to the athlete's OWN prior baseline. Because
+// it is within-athlete, the fixed per-athlete offset cancels and the change is
+// measured at ~kValgusPrecisionDeg — so anything inside that band is reported as
+// "stable" instead of a false alarm. This is the ACL-buildup signal.
+
+class _ValgusBuildupCard extends StatelessWidget {
+  final Athlete athlete;
+  final JumpSession session;
+  const _ValgusBuildupCard({required this.athlete, required this.session});
+
+  @override
+  Widget build(BuildContext context) {
+    final t = athlete.valgusTrendAt(session);
+    if (t.status == TrendStatus.insufficient || t.delta == null) {
+      return const SizedBox.shrink();
+    }
+    final Color color;
+    final String tag;
+    final String headline;
+    switch (t.status) {
+      case TrendStatus.rising:
+        color = LColors.red;
+        tag = 'TRENDING UP';
+        headline = 'Valgus is building beyond this athlete’s normal range — watch ACL load.';
+        break;
+      case TrendStatus.improving:
+        color = LColors.green;
+        tag = 'IMPROVING';
+        headline = 'Valgus is trending down vs this athlete’s baseline.';
+        break;
+      case TrendStatus.stable:
+      case TrendStatus.insufficient:
+        color = LColors.slate;
+        tag = 'STABLE';
+        headline = 'Within this athlete’s normal range — no meaningful change.';
+        break;
+    }
+    final d = t.delta!;
+    final deltaStr = '${d >= 0 ? '+' : '−'}${d.abs().toStringAsFixed(1)}°';
+    final nPrior = athlete.sessions.indexOf(session);
+
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        SectionLabel('BUILDUP VS BASELINE', trailing: StatusPill(tag, color)),
+        const SizedBox(height: 12),
+        LCard(
+          padding: const EdgeInsets.all(18),
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Row(
+                crossAxisAlignment: CrossAxisAlignment.end,
+                children: [
+                  _BaselineStat('BASELINE', '${t.baseline!.toStringAsFixed(1)}°'),
+                  const Padding(padding: EdgeInsets.symmetric(horizontal: 14),
+                      child: Icon(Icons.arrow_forward_rounded, size: 16, color: LColors.inkLow)),
+                  _BaselineStat('THIS SESSION', '${t.current!.toStringAsFixed(1)}°'),
+                  const Spacer(),
+                  Text(deltaStr, style: TextStyle(fontSize: 22, fontWeight: FontWeight.w900, color: color, letterSpacing: -0.5)),
+                ],
+              ),
+              const SizedBox(height: 12),
+              Text(headline, style: const TextStyle(fontSize: 13, color: LColors.ink, fontWeight: FontWeight.w600, height: 1.4)),
+              const SizedBox(height: 4),
+              Text('Peak knee valgus vs the median of $nPrior prior session(s). Changes under '
+                  '${kValgusPrecisionDeg.toStringAsFixed(0)}° are within measurement precision, so they are not flagged.',
+                  style: const TextStyle(fontSize: 11, color: LColors.inkMid, height: 1.45)),
+            ],
+          ),
+        ),
+        const SizedBox(height: 24),
+      ],
+    );
+  }
+}
+
+class _BaselineStat extends StatelessWidget {
+  final String label, value;
+  const _BaselineStat(this.label, this.value);
+  @override
+  Widget build(BuildContext context) {
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      mainAxisSize: MainAxisSize.min,
+      children: [
+        Text(label, style: const TextStyle(fontSize: 8.5, color: LColors.inkMid, fontWeight: FontWeight.w700, letterSpacing: 0.8)),
+        const SizedBox(height: 3),
+        Text(value, style: const TextStyle(fontSize: 18, fontWeight: FontWeight.w800, color: LColors.ink)),
+      ],
     );
   }
 }
