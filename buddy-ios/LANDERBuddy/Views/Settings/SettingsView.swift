@@ -1,8 +1,8 @@
 import SwiftUI
 
 struct SettingsView: View {
-    @EnvironmentObject var appState: AppState
-    @EnvironmentObject var authManager: AuthManager
+    @Environment(AppState.self) var appState
+    @Environment(AuthManager.self) var authManager
     
     @State private var teamName: String = ""
     @State private var thresholds: Thresholds = .defaults

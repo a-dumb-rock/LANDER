@@ -1,7 +1,7 @@
 import SwiftUI
 
 struct LoginView: View {
-    @EnvironmentObject var authManager: AuthManager
+    @Environment(AuthManager.self) var authManager
     @State private var showSignUp = false
     @State private var email = ""
     @State private var password = ""
@@ -74,7 +74,7 @@ struct LoginView: View {
             }
             .navigationDestination(isPresented: $showSignUp) {
                 SignUpView()
-                    .environmentObject(authManager)
+                    .environment(authManager)
             }
         }
     }

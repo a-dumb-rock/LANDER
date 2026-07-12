@@ -1,16 +1,17 @@
 import SwiftUI
-import Combine
+import Observation
 
 /// Central app state that holds the current team, athletes, and readiness data.
 @MainActor
-class AppState: ObservableObject {
-    @Published var team: Team?
-    @Published var athletes: [Athlete] = []
-    @Published var sessions: [CaptureSession] = []
-    @Published var captures: [Capture] = []
-    @Published var readinessList: [AthleteReadiness] = []
-    @Published var isLoading = false
-    @Published var error: String?
+@Observable
+class AppState {
+    var team: Team?
+    var athletes: [Athlete] = []
+    var sessions: [CaptureSession] = []
+    var captures: [Capture] = []
+    var readinessList: [AthleteReadiness] = []
+    var isLoading = false
+    var error: String?
     
     private let db = SupabaseManager.shared
     

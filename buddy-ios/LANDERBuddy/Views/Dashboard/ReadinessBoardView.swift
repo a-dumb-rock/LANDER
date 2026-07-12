@@ -1,7 +1,7 @@
 import SwiftUI
 
 struct ReadinessBoardView: View {
-    @EnvironmentObject var appState: AppState
+    @Environment(AppState.self) var appState
     
     private var counts: [ReadinessStatus: Int] {
         Dictionary(grouping: appState.readinessList, by: { $0.status })

@@ -1,7 +1,7 @@
 import SwiftUI
 
 struct SessionsListView: View {
-    @EnvironmentObject var appState: AppState
+    @Environment(AppState.self) var appState
     
     var body: some View {
         NavigationStack {

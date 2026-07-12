@@ -1,7 +1,7 @@
 import SwiftUI
 
 struct RosterView: View {
-    @EnvironmentObject var appState: AppState
+    @Environment(AppState.self) var appState
     @State private var showingAddSheet = false
     @State private var editingAthlete: Athlete?
     

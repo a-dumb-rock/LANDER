@@ -1,7 +1,7 @@
 import SwiftUI
 
 struct SessionDetailView: View {
-    @EnvironmentObject var appState: AppState
+    @Environment(AppState.self) var appState
     let session: CaptureSession
     
     private var sessionCaptures: [Capture] {

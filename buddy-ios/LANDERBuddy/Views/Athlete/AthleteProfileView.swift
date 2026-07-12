@@ -1,7 +1,7 @@
 import SwiftUI
 
 struct AthleteProfileView: View {
-    @EnvironmentObject var appState: AppState
+    @Environment(AppState.self) var appState
     let athleteId: UUID
     
     private var readiness: AthleteReadiness? {

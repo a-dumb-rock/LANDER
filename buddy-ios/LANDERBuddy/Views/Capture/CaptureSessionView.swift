@@ -2,8 +2,8 @@ import SwiftUI
 import PhotosUI
 
 struct CaptureSessionView: View {
-    @EnvironmentObject var appState: AppState
-    @EnvironmentObject var authManager: AuthManager
+    @Environment(AppState.self) var appState
+    @Environment(AuthManager.self) var authManager
     
     @State private var sessionDate = Date()
     @State private var sessionState: SessionState = .fresh

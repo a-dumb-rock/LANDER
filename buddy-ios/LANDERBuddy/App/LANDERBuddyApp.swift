@@ -2,19 +2,19 @@ import SwiftUI
 
 @main
 struct LANDERBuddyApp: App {
-    @StateObject private var authManager = AuthManager()
-    @StateObject private var appState = AppState()
+    @State private var authManager = AuthManager()
+    @State private var appState = AppState()
     
     var body: some Scene {
         WindowGroup {
             Group {
                 if authManager.isAuthenticated {
                     MainTabView()
-                        .environmentObject(authManager)
-                        .environmentObject(appState)
+                        .environment(authManager)
+                        .environment(appState)
                 } else {
                     LoginView()
-                        .environmentObject(authManager)
+                        .environment(authManager)
                 }
             }
             .task {

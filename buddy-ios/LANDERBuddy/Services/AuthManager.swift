@@ -1,13 +1,14 @@
-import Foundation
 import SwiftUI
+import Observation
 
 /// Mock auth manager — auto-logs in for demo purposes.
 @MainActor
-class AuthManager: ObservableObject {
-    @Published var isAuthenticated = true  // Auto-authenticated for demo
-    @Published var userId: UUID? = UUID()
-    @Published var isLoading = false
-    @Published var error: String?
+@Observable
+class AuthManager {
+    var isAuthenticated = true  // Auto-authenticated for demo
+    var userId: UUID? = UUID()
+    var isLoading = false
+    var error: String?
     
     func checkSession() async {
         // Auto-authenticated in demo mode
