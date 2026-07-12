@@ -1,14 +1,63 @@
 import Foundation
 import Supabase
 
-/// Centralized Supabase client for auth and database operations.
+// MARK: - Codable DTOs for Supabase inserts/updates
+
+struct TeamInsert: Codable {
+    let name: String
+}
+
+struct TeamUpdate: Codable {
+    var name: String?
+    var thresholds: Thresholds?
+}
+
+struct ProfileUpdate: Codable {
+    var team_id: String?
+    var role: String?
+}
+
+struct AthleteInsert: Codable {
+    let team_id: String
+    let name: String
+    let jersey_number: String
+    let position: String
+}
+
+struct AthleteUpdate: Codable {
+    var name: String?
+    var jersey_number: String?
+    var position: String?
+    var active: Bool?
+}
+
+struct SessionInsert: Codable {
+    let team_id: String
+    let date: String
+    let state: String
+    let created_by: String
+}
+
+struct CaptureInsert: Codable {
+    let session_id: String
+    let athlete_id: String
+    let knee_valgus_deg: Double
+    let knee_flexion_deg: Double
+    let trunk_lean_deg: Double
+    let less_score: Double
+    let risk_level: String
+    let asymmetry_index: Double
+    let model_version: String
+}
+
+// MARK: - Supabase Manager
+
 class SupabaseManager {
     static let shared = SupabaseManager()
     
     let client: SupabaseClient
     
     private init() {
-        // These should be set in Config.swift or via environment
         let url = URL(string: Config.supabaseURL)!
         let key = Config.supabaseAnonKey
         
@@ -42,7 +91,7 @@ class SupabaseManager {
     
     func createTeam(name: String) async throws -> Team {
         let team: Team = try await client.from("teams")
-            .insert(["name": name])
+            .insert(TeamInsert(name: name))
             .select()
             .single()
             .execute()
@@ -52,15 +101,8 @@ class SupabaseManager {
     }
     
     func updateTeam(id: UUID, name: String, thresholds: Thresholds) async throws {
-        let encoder = JSONEncoder()
-        let thresholdsData = try encoder.encode(thresholds)
-        let thresholdsDict = try JSONSerialization.jsonObject(with: thresholdsData) as! [String: Any]
-        
         try await client.from("teams")
-            .update([
-                "name": AnyJSON.string(name),
-                "thresholds": AnyJSON(thresholdsDict)
-            ])
+            .update(TeamUpdate(name: name, thresholds: thresholds))
             .eq("id", value: id)
             .execute()
     }
@@ -69,10 +111,7 @@ class SupabaseManager {
     
     func updateProfile(userId: UUID, teamId: UUID, role: UserRole) async throws {
         try await client.from("profiles")
-            .update([
-                "team_id": AnyJSON.string(teamId.uuidString),
-                "role": AnyJSON.string(role.rawValue)
-            ])
+            .update(ProfileUpdate(team_id: teamId.uuidString, role: role.rawValue))
             .eq("id", value: userId)
             .execute()
     }
@@ -93,12 +132,12 @@ class SupabaseManager {
     
     func addAthlete(teamId: UUID, name: String, jerseyNumber: String, position: String) async throws -> Athlete {
         let athlete: Athlete = try await client.from("athletes")
-            .insert([
-                "team_id": teamId.uuidString,
-                "name": name,
-                "jersey_number": jerseyNumber,
-                "position": position
-            ])
+            .insert(AthleteInsert(
+                team_id: teamId.uuidString,
+                name: name,
+                jersey_number: jerseyNumber,
+                position: position
+            ))
             .select()
             .single()
             .execute()
@@ -109,18 +148,14 @@ class SupabaseManager {
     
     func updateAthlete(id: UUID, name: String, jerseyNumber: String, position: String) async throws {
         try await client.from("athletes")
-            .update([
-                "name": AnyJSON.string(name),
-                "jersey_number": AnyJSON.string(jerseyNumber),
-                "position": AnyJSON.string(position)
-            ])
+            .update(AthleteUpdate(name: name, jersey_number: jerseyNumber, position: position))
             .eq("id", value: id)
             .execute()
     }
     
     func deactivateAthlete(id: UUID) async throws {
         try await client.from("athletes")
-            .update(["active": AnyJSON.bool(false)])
+            .update(AthleteUpdate(active: false))
             .eq("id", value: id)
             .execute()
     }
@@ -147,12 +182,12 @@ class SupabaseManager {
         formatter.dateFormat = "yyyy-MM-dd"
         
         let session: CaptureSession = try await client.from("sessions")
-            .insert([
-                "team_id": teamId.uuidString,
-                "date": formatter.string(from: date),
-                "state": state.rawValue,
-                "created_by": userId.uuidString
-            ])
+            .insert(SessionInsert(
+                team_id: teamId.uuidString,
+                date: formatter.string(from: date),
+                state: state.rawValue,
+                created_by: userId.uuidString
+            ))
             .select()
             .single()
             .execute()
@@ -187,17 +222,17 @@ class SupabaseManager {
     
     func insertCapture(sessionId: UUID, athleteId: UUID, metrics: ModelMetrics) async throws {
         try await client.from("captures")
-            .insert([
-                "session_id": AnyJSON.string(sessionId.uuidString),
-                "athlete_id": AnyJSON.string(athleteId.uuidString),
-                "knee_valgus_deg": AnyJSON.double(metrics.kneeValgusDeg),
-                "knee_flexion_deg": AnyJSON.double(metrics.kneeFlexionDeg),
-                "trunk_lean_deg": AnyJSON.double(metrics.trunkLeanDeg),
-                "less_score": AnyJSON.double(metrics.lessScore),
-                "risk_level": AnyJSON.string(metrics.riskLevel),
-                "asymmetry_index": AnyJSON.double(metrics.asymmetryIndex),
-                "model_version": AnyJSON.string("mock-v1")
-            ])
+            .insert(CaptureInsert(
+                session_id: sessionId.uuidString,
+                athlete_id: athleteId.uuidString,
+                knee_valgus_deg: metrics.kneeValgusDeg,
+                knee_flexion_deg: metrics.kneeFlexionDeg,
+                trunk_lean_deg: metrics.trunkLeanDeg,
+                less_score: metrics.lessScore,
+                risk_level: metrics.riskLevel,
+                asymmetry_index: metrics.asymmetryIndex,
+                model_version: "mock-v1"
+            ))
             .execute()
     }
 }
