@@ -1,4 +1,5 @@
 import Foundation
+import SwiftUI
 
 /// Mock auth manager — auto-logs in for demo purposes.
 @MainActor

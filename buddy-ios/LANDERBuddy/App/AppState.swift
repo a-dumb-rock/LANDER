@@ -1,4 +1,5 @@
 import SwiftUI
+import Combine
 
 /// Central app state that holds the current team, athletes, and readiness data.
 @MainActor
