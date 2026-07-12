@@ -6,7 +6,7 @@ struct Team: Codable, Identifiable {
     let id: UUID
     var name: String
     var thresholds: Thresholds
-    let createdAt: Date
+    var createdAt: Date
     
     enum CodingKeys: String, CodingKey {
         case id, name, thresholds

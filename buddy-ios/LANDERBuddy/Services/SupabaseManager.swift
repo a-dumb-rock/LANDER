@@ -1,238 +1,153 @@
 import Foundation
-import Supabase
 
-// MARK: - Codable DTOs for Supabase inserts/updates
-
-struct TeamInsert: Codable {
-    let name: String
-}
-
-struct TeamUpdate: Codable {
-    var name: String?
-    var thresholds: Thresholds?
-}
-
-struct ProfileUpdate: Codable {
-    var team_id: String?
-    var role: String?
-}
-
-struct AthleteInsert: Codable {
-    let team_id: String
-    let name: String
-    let jersey_number: String
-    let position: String
-}
-
-struct AthleteUpdate: Codable {
-    var name: String?
-    var jersey_number: String?
-    var position: String?
-    var active: Bool?
-}
-
-struct SessionInsert: Codable {
-    let team_id: String
-    let date: String
-    let state: String
-    let created_by: String
-}
-
-struct CaptureInsert: Codable {
-    let session_id: String
-    let athlete_id: String
-    let knee_valgus_deg: Double
-    let knee_flexion_deg: Double
-    let trunk_lean_deg: Double
-    let less_score: Double
-    let risk_level: String
-    let asymmetry_index: Double
-    let model_version: String
-}
-
-// MARK: - Supabase Manager
-
+/// Mock data manager — replaces Supabase for now.
+/// All data is stored in memory. No backend needed.
 class SupabaseManager {
     static let shared = SupabaseManager()
     
-    let client: SupabaseClient
+    // In-memory storage
+    private var team: Team?
+    private var athletes: [Athlete] = []
+    private var sessions: [CaptureSession] = []
+    private var captures: [Capture] = []
     
     private init() {
-        let url = URL(string: Config.supabaseURL)!
-        let key = Config.supabaseAnonKey
-        
-        client = SupabaseClient(
-            supabaseURL: url,
-            supabaseKey: key
+        // Seed with demo data
+        let teamId = UUID()
+        team = Team(
+            id: teamId,
+            name: "Demo Team",
+            thresholds: .defaults,
+            createdAt: Date()
         )
+        
+        // Demo athletes
+        let a1 = Athlete(id: UUID(), teamId: teamId, name: "Sarah Johnson", jerseyNumber: "7", position: "Forward", active: true, createdAt: Date())
+        let a2 = Athlete(id: UUID(), teamId: teamId, name: "Maria Garcia", jerseyNumber: "12", position: "Midfielder", active: true, createdAt: Date())
+        let a3 = Athlete(id: UUID(), teamId: teamId, name: "Emily Chen", jerseyNumber: "3", position: "Defender", active: true, createdAt: Date())
+        let a4 = Athlete(id: UUID(), teamId: teamId, name: "Alex Williams", jerseyNumber: "21", position: "Goalkeeper", active: true, createdAt: Date())
+        athletes = [a1, a2, a3, a4]
+        
+        // Generate some demo session history (last 4 weeks)
+        for weeksAgo in (0..<4).reversed() {
+            let freshDate = Calendar.current.date(byAdding: .weekOfYear, value: -weeksAgo, to: Date())!
+            let fatiguedDate = Calendar.current.date(byAdding: .day, value: 1, to: freshDate)!
+            
+            let freshSession = CaptureSession(id: UUID(), teamId: teamId, date: freshDate, state: .fresh, notes: nil, createdBy: nil, createdAt: freshDate)
+            let fatiguedSession = CaptureSession(id: UUID(), teamId: teamId, date: fatiguedDate, state: .fatigued, notes: nil, createdBy: nil, createdAt: fatiguedDate)
+            sessions.append(freshSession)
+            sessions.append(fatiguedSession)
+            
+            // Generate captures for each athlete
+            for athlete in athletes {
+                let freshMetrics = CVModelService.mockMetricsSync(sessionState: .fresh)
+                let fatiguedMetrics = CVModelService.mockMetricsSync(sessionState: .fatigued)
+                
+                captures.append(Capture(
+                    id: UUID(), sessionId: freshSession.id, athleteId: athlete.id,
+                    kneeValgusDeg: freshMetrics.kneeValgusDeg,
+                    kneeFlexionDeg: freshMetrics.kneeFlexionDeg,
+                    trunkLeanDeg: freshMetrics.trunkLeanDeg,
+                    lessScore: freshMetrics.lessScore,
+                    riskLevel: freshMetrics.riskLevel,
+                    asymmetryIndex: freshMetrics.asymmetryIndex,
+                    vulnerabilityScore: nil, fatigueCategory: nil,
+                    modelVersion: "mock", createdAt: freshDate
+                ))
+                captures.append(Capture(
+                    id: UUID(), sessionId: fatiguedSession.id, athleteId: athlete.id,
+                    kneeValgusDeg: fatiguedMetrics.kneeValgusDeg,
+                    kneeFlexionDeg: fatiguedMetrics.kneeFlexionDeg,
+                    trunkLeanDeg: fatiguedMetrics.trunkLeanDeg,
+                    lessScore: fatiguedMetrics.lessScore,
+                    riskLevel: fatiguedMetrics.riskLevel,
+                    asymmetryIndex: fatiguedMetrics.asymmetryIndex,
+                    vulnerabilityScore: nil, fatigueCategory: nil,
+                    modelVersion: "mock", createdAt: fatiguedDate
+                ))
+            }
+        }
     }
     
     // MARK: - Team
     
-    func getTeam() async throws -> Team? {
-        let profile: Profile = try await client.from("profiles")
-            .select()
-            .eq("id", value: client.auth.session.user.id)
-            .single()
-            .execute()
-            .value
-        
-        guard let teamId = profile.teamId else { return nil }
-        
-        let team: Team = try await client.from("teams")
-            .select()
-            .eq("id", value: teamId)
-            .single()
-            .execute()
-            .value
-        
-        return team
-    }
+    func getTeam() async throws -> Team? { team }
     
     func createTeam(name: String) async throws -> Team {
-        let team: Team = try await client.from("teams")
-            .insert(TeamInsert(name: name))
-            .select()
-            .single()
-            .execute()
-            .value
-        
-        return team
+        let t = Team(id: UUID(), name: name, thresholds: .defaults, createdAt: Date())
+        team = t
+        return t
     }
     
     func updateTeam(id: UUID, name: String, thresholds: Thresholds) async throws {
-        try await client.from("teams")
-            .update(TeamUpdate(name: name, thresholds: thresholds))
-            .eq("id", value: id)
-            .execute()
+        team?.name = name
+        team?.thresholds = thresholds
     }
     
     // MARK: - Profile
     
-    func updateProfile(userId: UUID, teamId: UUID, role: UserRole) async throws {
-        try await client.from("profiles")
-            .update(ProfileUpdate(team_id: teamId.uuidString, role: role.rawValue))
-            .eq("id", value: userId)
-            .execute()
-    }
+    func updateProfile(userId: UUID, teamId: UUID, role: UserRole) async throws {}
     
     // MARK: - Athletes
     
     func getAthletes(teamId: UUID) async throws -> [Athlete] {
-        let athletes: [Athlete] = try await client.from("athletes")
-            .select()
-            .eq("team_id", value: teamId)
-            .eq("active", value: true)
-            .order("jersey_number")
-            .execute()
-            .value
-        
-        return athletes
+        athletes.filter { $0.active }
     }
     
     func addAthlete(teamId: UUID, name: String, jerseyNumber: String, position: String) async throws -> Athlete {
-        let athlete: Athlete = try await client.from("athletes")
-            .insert(AthleteInsert(
-                team_id: teamId.uuidString,
-                name: name,
-                jersey_number: jerseyNumber,
-                position: position
-            ))
-            .select()
-            .single()
-            .execute()
-            .value
-        
-        return athlete
+        let a = Athlete(id: UUID(), teamId: teamId, name: name, jerseyNumber: jerseyNumber, position: position, active: true, createdAt: Date())
+        athletes.append(a)
+        return a
     }
     
     func updateAthlete(id: UUID, name: String, jerseyNumber: String, position: String) async throws {
-        try await client.from("athletes")
-            .update(AthleteUpdate(name: name, jersey_number: jerseyNumber, position: position))
-            .eq("id", value: id)
-            .execute()
+        if let i = athletes.firstIndex(where: { $0.id == id }) {
+            athletes[i].name = name
+            athletes[i].jerseyNumber = jerseyNumber
+            athletes[i].position = position
+        }
     }
     
     func deactivateAthlete(id: UUID) async throws {
-        try await client.from("athletes")
-            .update(AthleteUpdate(active: false))
-            .eq("id", value: id)
-            .execute()
+        if let i = athletes.firstIndex(where: { $0.id == id }) {
+            athletes[i].active = false
+        }
     }
     
     // MARK: - Sessions
     
     func getSessions(teamId: UUID, since: Date) async throws -> [CaptureSession] {
-        let formatter = ISO8601DateFormatter()
-        let dateStr = formatter.string(from: since)
-        
-        let sessions: [CaptureSession] = try await client.from("sessions")
-            .select()
-            .eq("team_id", value: teamId)
-            .gte("date", value: dateStr)
-            .order("date", ascending: false)
-            .execute()
-            .value
-        
-        return sessions
+        sessions.filter { $0.date >= since }.sorted { $0.date > $1.date }
     }
     
     func createSession(teamId: UUID, date: Date, state: SessionState, userId: UUID) async throws -> CaptureSession {
-        let formatter = DateFormatter()
-        formatter.dateFormat = "yyyy-MM-dd"
-        
-        let session: CaptureSession = try await client.from("sessions")
-            .insert(SessionInsert(
-                team_id: teamId.uuidString,
-                date: formatter.string(from: date),
-                state: state.rawValue,
-                created_by: userId.uuidString
-            ))
-            .select()
-            .single()
-            .execute()
-            .value
-        
-        return session
+        let s = CaptureSession(id: UUID(), teamId: teamId, date: date, state: state, notes: nil, createdBy: userId, createdAt: Date())
+        sessions.append(s)
+        return s
     }
     
     // MARK: - Captures
     
     func getCaptures(sessionIds: [UUID]) async throws -> [Capture] {
-        let captures: [Capture] = try await client.from("captures")
-            .select()
-            .in("session_id", values: sessionIds.map { $0.uuidString })
-            .execute()
-            .value
-        
-        return captures
+        captures.filter { sessionIds.contains($0.sessionId) }
     }
     
     func getCapturesForAthlete(athleteId: UUID, sessionIds: [UUID]) async throws -> [Capture] {
-        let captures: [Capture] = try await client.from("captures")
-            .select()
-            .eq("athlete_id", value: athleteId)
-            .in("session_id", values: sessionIds.map { $0.uuidString })
-            .order("created_at", ascending: true)
-            .execute()
-            .value
-        
-        return captures
+        captures.filter { $0.athleteId == athleteId && sessionIds.contains($0.sessionId) }
     }
     
     func insertCapture(sessionId: UUID, athleteId: UUID, metrics: ModelMetrics) async throws {
-        try await client.from("captures")
-            .insert(CaptureInsert(
-                session_id: sessionId.uuidString,
-                athlete_id: athleteId.uuidString,
-                knee_valgus_deg: metrics.kneeValgusDeg,
-                knee_flexion_deg: metrics.kneeFlexionDeg,
-                trunk_lean_deg: metrics.trunkLeanDeg,
-                less_score: metrics.lessScore,
-                risk_level: metrics.riskLevel,
-                asymmetry_index: metrics.asymmetryIndex,
-                model_version: "mock-v1"
-            ))
-            .execute()
+        let c = Capture(
+            id: UUID(), sessionId: sessionId, athleteId: athleteId,
+            kneeValgusDeg: metrics.kneeValgusDeg,
+            kneeFlexionDeg: metrics.kneeFlexionDeg,
+            trunkLeanDeg: metrics.trunkLeanDeg,
+            lessScore: metrics.lessScore,
+            riskLevel: metrics.riskLevel,
+            asymmetryIndex: metrics.asymmetryIndex,
+            vulnerabilityScore: nil, fatigueCategory: nil,
+            modelVersion: "mock", createdAt: Date()
+        )
+        captures.append(c)
     }
 }
