@@ -651,25 +651,39 @@ struct AnimatedSplashView: View {
                 }
             }
         }
-        .onAppear { startAnimation() }
+        .onAppear {
+            // Delay start by one frame so SwiftUI renders initial state first
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.05) {
+                startAnimation()
+            }
+        }
     }
     
     private func startAnimation() {
-        // Ground fades in
-        withAnimation(.easeOut(duration: 0.5).delay(0.1)) { groundOpacity = 1 }
-        
-        // Athlete leaps (4-phase arc)
-        // Phase 1: appear and launch (0-0.5s)
-        withAnimation(.easeOut(duration: 0.3).delay(0.15)) { jumperOpacity = 1 }
-        
-        // Phase 2: arc up to peak (0.15-1.0s)
-        withAnimation(.easeInOut(duration: 0.85).delay(0.15)) {
-            jumperOffset = CGPoint(x: 6, y: -84)
-            jumperRotation = 9
-            jumperScale = 1.08
+        // ─── Ground fades in (0.1s) ───
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.1) {
+            withAnimation(.easeOut(duration: 0.5)) {
+                groundOpacity = 1
+            }
         }
         
-        // Keypoints snap on during arc (0.55-1.1s)
+        // ─── Athlete appears (0.15s) ───
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.15) {
+            withAnimation(.easeOut(duration: 0.3)) {
+                jumperOpacity = 1
+            }
+        }
+        
+        // ─── Arc up to peak (0.15s–1.0s) ───
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.15) {
+            withAnimation(.easeInOut(duration: 0.85)) {
+                jumperOffset = CGPoint(x: 6, y: -84)
+                jumperRotation = 9
+                jumperScale = 1.08
+            }
+        }
+        
+        // ─── Keypoints snap on ONE BY ONE during arc (0.55s–1.1s) ───
         for i in 0..<9 {
             DispatchQueue.main.asyncAfter(deadline: .now() + 0.55 + Double(i) * 0.06) {
                 withAnimation(.spring(response: 0.3, dampingFraction: 0.5)) {
@@ -678,41 +692,51 @@ struct AnimatedSplashView: View {
             }
         }
         
-        // Phase 3: descend to landing (1.0-1.5s)
-        withAnimation(.easeIn(duration: 0.5).delay(1.0)) {
-            jumperOffset = CGPoint(x: 112, y: 24)
-            jumperRotation = 13
-            jumperScale = 1.0
+        // ─── Descend to landing (1.0s–1.5s) ───
+        DispatchQueue.main.asyncAfter(deadline: .now() + 1.0) {
+            withAnimation(.easeIn(duration: 0.5)) {
+                jumperOffset = CGPoint(x: 112, y: 24)
+                jumperRotation = 13
+                jumperScale = 1.0
+            }
         }
         
-        // Phase 4: settle (1.5-1.7s)
-        withAnimation(.easeOut(duration: 0.2).delay(1.5)) {
-            jumperRotation = 0
+        // ─── Settle rotation after landing (1.5s–1.7s) ───
+        DispatchQueue.main.asyncAfter(deadline: .now() + 1.5) {
+            withAnimation(.easeOut(duration: 0.2)) {
+                jumperRotation = 0
+            }
         }
         
-        // Defender topples (0.15-1.9s)
-        withAnimation(.timingCurve(0.5, 0.05, 0.5, 1, duration: 1.75).delay(0.5)) {
-            defenderRotation = -90
+        // ─── Defender topples backwards (0.5s–1.9s) ───
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.15) {
+            withAnimation(.timingCurve(0.5, 0.05, 0.5, 1, duration: 1.75)) {
+                defenderRotation = -90
+            }
         }
         
-        // Landing flash (1.35s)
+        // ─── Landing flash expands and fades (1.35s) ───
         DispatchQueue.main.asyncAfter(deadline: .now() + 1.35) {
             withAnimation(.easeOut(duration: 0.7)) {
                 flashScale = 7
                 flashOpacity = 0.55
             }
-            withAnimation(.easeOut(duration: 0.7).delay(0.15)) {
-                flashOpacity = 0
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.15) {
+                withAnimation(.easeOut(duration: 0.7)) {
+                    flashOpacity = 0
+                }
             }
         }
         
-        // Brand appears (1.6s)
-        withAnimation(.timingCurve(0.2, 0.7, 0.2, 1, duration: 0.65).delay(1.6)) {
-            brandOpacity = 1
-            brandOffset = 0
+        // ─── Brand fades in from below (1.6s) ───
+        DispatchQueue.main.asyncAfter(deadline: .now() + 1.6) {
+            withAnimation(.timingCurve(0.2, 0.7, 0.2, 1, duration: 0.65)) {
+                brandOpacity = 1
+                brandOffset = 0
+            }
         }
         
-        // Auto-dismiss (3.5s)
+        // ─── Auto-dismiss (3.5s) ───
         DispatchQueue.main.asyncAfter(deadline: .now() + 3.5) {
             withAnimation(.spring(response: 0.5, dampingFraction: 0.8)) {
                 engine.showSplash = false
