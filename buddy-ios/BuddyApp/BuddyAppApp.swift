@@ -749,29 +749,36 @@ struct AnimatedSplashView: View {
 struct LeapingAthlete: View {
     let keypointsVisible: [Bool]
     
+    // Coordinate system: center of figure is (centerX, centerY) in the fixed frame
+    private let figW: CGFloat = 80
+    private let figH: CGFloat = 130
+    // Origin offset so (0,0) in our joint coords maps to center of frame
+    private let originX: CGFloat = 40
+    private let originY: CGFloat = 80
+    
     var body: some View {
-        ZStack {
+        ZStack(alignment: .topLeading) {
             // Body (white stick figure with glow)
             Path { path in
                 // Torso
-                path.move(to: CGPoint(x: 0, y: -30))
-                path.addLine(to: CGPoint(x: 0, y: -4))
+                path.move(to: pt(0, -30))
+                path.addLine(to: pt(0, -4))
                 // Left leg
-                path.move(to: CGPoint(x: 0, y: -4))
-                path.addLine(to: CGPoint(x: -16, y: 20))
-                path.addLine(to: CGPoint(x: -30, y: 30))
+                path.move(to: pt(0, -4))
+                path.addLine(to: pt(-16, 20))
+                path.addLine(to: pt(-30, 30))
                 // Right leg
-                path.move(to: CGPoint(x: 0, y: -4))
-                path.addLine(to: CGPoint(x: 16, y: 18))
-                path.addLine(to: CGPoint(x: 12, y: 40))
+                path.move(to: pt(0, -4))
+                path.addLine(to: pt(16, 18))
+                path.addLine(to: pt(12, 40))
                 // Left arm
-                path.move(to: CGPoint(x: 0, y: -28))
-                path.addLine(to: CGPoint(x: -16, y: -38))
-                path.addLine(to: CGPoint(x: -24, y: -30))
+                path.move(to: pt(0, -28))
+                path.addLine(to: pt(-16, -38))
+                path.addLine(to: pt(-24, -30))
                 // Right arm (reaching up for ball)
-                path.move(to: CGPoint(x: 0, y: -28))
-                path.addLine(to: CGPoint(x: 14, y: -46))
-                path.addLine(to: CGPoint(x: 20, y: -64))
+                path.move(to: pt(0, -28))
+                path.addLine(to: pt(14, -46))
+                path.addLine(to: pt(20, -64))
             }
             .stroke(Color(white: 0.92), style: StrokeStyle(lineWidth: 4, lineCap: .round, lineJoin: .round))
             .shadow(color: Color.brand.opacity(0.22), radius: 8)
@@ -780,7 +787,7 @@ struct LeapingAthlete: View {
             Circle()
                 .fill(Color(white: 0.92))
                 .frame(width: 24, height: 24)
-                .offset(x: 0, y: -45)
+                .position(pt(0, -45))
             
             // Football
             Ellipse()
@@ -788,7 +795,7 @@ struct LeapingAthlete: View {
                 .stroke(Color(red: 0.79, green: 0.55, blue: 0.37), lineWidth: 1.3)
                 .frame(width: 26, height: 16)
                 .rotationEffect(.degrees(-26))
-                .offset(x: 26, y: -68)
+                .position(pt(26, -68))
             
             // Pose keypoints (green dots that snap on)
             let kpPositions: [CGPoint] = [
@@ -810,9 +817,15 @@ struct LeapingAthlete: View {
                     .frame(width: 7, height: 7)
                     .shadow(color: Color.brand, radius: 4)
                     .scaleEffect(keypointsVisible[i] ? 1.0 : 0.0)
-                    .offset(x: kpPositions[i].x, y: kpPositions[i].y)
+                    .position(pt(kpPositions[i].x, kpPositions[i].y))
             }
         }
+        .frame(width: figW, height: figH)
+    }
+    
+    /// Convert local joint coordinates to absolute position in the fixed frame
+    private func pt(_ x: CGFloat, _ y: CGFloat) -> CGPoint {
+        CGPoint(x: originX + x, y: originY + y)
     }
 }
 
