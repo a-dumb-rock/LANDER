@@ -76,6 +76,7 @@ struct Athlete: Identifiable, Codable {
     var position: String
     var sessions: [DataPoint]
     var photoData: Data?
+    var injuryNotes: [String]? // e.g. ["ACL tear 2023", "Ankle sprain Week 3"]
 }
 
 struct AthleteReadiness: Identifiable, Equatable {
@@ -126,6 +127,68 @@ struct PersistenceManager {
 }
 
 
+// MARK: - CV Model Service
+enum CVModelService {
+    static let modelURL = "http://localhost:8000" // Change to real server URL
+    static let useMock = true // Set to false when real server is running
+    
+    static func analyze(videoURL: URL?) async -> ModelMetrics {
+        if useMock || videoURL == nil {
+            return mockMetrics()
+        }
+        
+        // Real API call to LANDER server.py
+        guard let videoURL = videoURL else { return mockMetrics() }
+        
+        let url = URL(string: "\(modelURL)/analyze-landing")!
+        var request = URLRequest(url: url)
+        request.httpMethod = "POST"
+        request.timeoutInterval = 60 // Video analysis can take time
+        
+        let boundary = UUID().uuidString
+        request.setValue("multipart/form-data; boundary=\(boundary)", forHTTPHeaderField: "Content-Type")
+        
+        var body = Data()
+        if let videoData = try? Data(contentsOf: videoURL) {
+            body.append("--\(boundary)\r\n".data(using: .utf8)!)
+            body.append("Content-Disposition: form-data; name=\"file\"; filename=\"video.mp4\"\r\n".data(using: .utf8)!)
+            body.append("Content-Type: video/mp4\r\n\r\n".data(using: .utf8)!)
+            body.append(videoData)
+            body.append("\r\n--\(boundary)--\r\n".data(using: .utf8)!)
+        }
+        request.httpBody = body
+        
+        do {
+            let (data, response) = try await URLSession.shared.data(for: request)
+            guard let httpResponse = response as? HTTPURLResponse, httpResponse.statusCode == 200 else {
+                return mockMetrics()
+            }
+            let json = try JSONSerialization.jsonObject(with: data) as? [String: Any] ?? [:]
+            return ModelMetrics(
+                valgusAngle: json["knee_valgus_angle"] as? Double ?? 6.0,
+                kneeFlexionAngle: json["knee_flexion_angle"] as? Double ?? 45.0,
+                trunkLean: json["trunk_lean_deg"] as? Double ?? 12.0,
+                asymmetry: (json["asymmetry_index"] as? Double ?? 0.05) * 100,
+                lessScore: json["less_total"] as? Int ?? json["less_score"] as? Int ?? 3
+            )
+        } catch {
+            print("CV Model API error: \(error)")
+            return mockMetrics()
+        }
+    }
+    
+    static func mockMetrics() -> ModelMetrics {
+        ModelMetrics(
+            valgusAngle: Double.random(in: 5.5...10.5),
+            kneeFlexionAngle: Double.random(in: 48...62),
+            trunkLean: Double.random(in: 3...12),
+            asymmetry: Double.random(in: 2...15),
+            lessScore: Int.random(in: 2...8)
+        )
+    }
+}
+
+
 // MARK: - Data Engine
 @Observable
 class DataEngine {
@@ -138,6 +201,7 @@ class DataEngine {
     var atRiskThreshold: Double = 18.0
     var showSplash = false
     var sessionNotes: [String: String] = [:] // key: "dateInterval-isFresh"
+    var capturedVideoURLs: [String: URL] = [:] // key: "athleteID-dateInterval"
 
     var hasCompletedOnboarding: Bool {
         get { UserDefaults.standard.bool(forKey: "hasCompletedOnboarding") }
@@ -198,6 +262,25 @@ class DataEngine {
         }
     }
 
+    func videoKey(athleteId: UUID, date: Date) -> String {
+        "\(athleteId.uuidString)-\(Int(date.timeIntervalSince1970 / 86400))"
+    }
+
+    func saveVideoURL(_ url: URL, athleteId: UUID, date: Date) {
+        capturedVideoURLs[videoKey(athleteId: athleteId, date: date)] = url
+    }
+
+    func getVideoURL(athleteId: UUID, date: Date) -> URL? {
+        capturedVideoURLs[videoKey(athleteId: athleteId, date: date)]
+    }
+
+    func addInjuryNote(athleteId: UUID, note: String) {
+        if let idx = athletes.firstIndex(where: { $0.id == athleteId }) {
+            athletes[idx].injuryNotes = (athletes[idx].injuryNotes ?? []) + [note]
+            save()
+        }
+    }
+
 
     func loadDemoData() {
         let cal = Calendar.current
@@ -234,10 +317,10 @@ class DataEngine {
             jake.append(DataPoint(date: weeksAgo(w, day: 2), value: 8.0 + (0.96 + progress * 0.96) + Double.random(in: -0.08...0.12), isFresh: false))
         }
         athletes = [
-            Athlete(id: UUID(), name: "Maya Johnson", jersey: 7, position: "Forward", sessions: maya),
-            Athlete(id: UUID(), name: "Carlos Rivera", jersey: 12, position: "Midfielder", sessions: carlos),
-            Athlete(id: UUID(), name: "Aisha Patel", jersey: 3, position: "Defender", sessions: aisha),
-            Athlete(id: UUID(), name: "Jake Thompson", jersey: 21, position: "Goalkeeper", sessions: jake)
+            Athlete(id: UUID(), name: "Maya Johnson", jersey: 7, position: "Forward", sessions: maya, injuryNotes: []),
+            Athlete(id: UUID(), name: "Carlos Rivera", jersey: 12, position: "Midfielder", sessions: carlos, injuryNotes: []),
+            Athlete(id: UUID(), name: "Aisha Patel", jersey: 3, position: "Defender", sessions: aisha, injuryNotes: []),
+            Athlete(id: UUID(), name: "Jake Thompson", jersey: 21, position: "Goalkeeper", sessions: jake, injuryNotes: ["Previous ACL reconstruction (2023)", "Ankle sprain — Week 2 this season"])
         ]
         save()
     }
@@ -1563,6 +1646,10 @@ struct AthleteDetailView: View {
     private var r: AthleteReadiness? { engine.allReadiness.first { $0.id == athleteID } }
     @State private var chartsAppeared = false
     @State private var statsAppeared = false
+    @State private var showAddInjuryNote = false
+    @State private var newInjuryNote = ""
+    @State private var showVideoPlayer = false
+    @State private var videoPlayerURL: URL? = nil
 
     var body: some View {
         ScrollView {
@@ -1602,6 +1689,35 @@ struct AthleteDetailView: View {
                     .cornerRadius(14)
                     .padding(.horizontal)
 
+                    // Injury Notes
+                    if let athlete = engine.athletes.first(where: { $0.id == athleteID }) {
+                        VStack(alignment: .leading, spacing: 10) {
+                            HStack {
+                                Text("Injury History").font(.subheadline.bold()).foregroundStyle(.white)
+                                Spacer()
+                                Button { showAddInjuryNote = true } label: {
+                                    Image(systemName: "plus.circle").foregroundStyle(Color.brand)
+                                }
+                            }
+                            if (athlete.injuryNotes ?? []).isEmpty {
+                                Text("No injury history recorded")
+                                    .font(.caption).foregroundStyle(Color.textSecondary)
+                            } else {
+                                ForEach(athlete.injuryNotes ?? [], id: \.self) { note in
+                                    HStack(spacing: 8) {
+                                        Image(systemName: "cross.case.fill")
+                                            .font(.caption).foregroundStyle(Color.statusRed)
+                                        Text(note).font(.caption).foregroundStyle(.white)
+                                    }
+                                }
+                            }
+                        }
+                        .padding(16)
+                        .background(Color.bgCard)
+                        .cornerRadius(14)
+                        .padding(.horizontal)
+                    }
+
                     // Charts (staggered fade-in)
                     LineChartView(data: r.valgusHistory, baselineValue: r.baselineValgus,
                         lineColor: .brand, title: "Knee Valgus", unit: "degrees", showFreshFatigued: true)
@@ -1640,8 +1756,19 @@ struct AthleteDetailView: View {
                     VStack(alignment: .leading, spacing: 10) {
                         Text("Session History").font(.headline).foregroundStyle(.white)
                         ForEach(r.allSessions.reversed()) { s in
-                            SessionHistoryRow(session: s, baselineValgus: r.baselineValgus,
-                                cautionThreshold: engine.cautionThreshold, atRiskThreshold: engine.atRiskThreshold)
+                            HStack(spacing: 0) {
+                                SessionHistoryRow(session: s, baselineValgus: r.baselineValgus,
+                                    cautionThreshold: engine.cautionThreshold, atRiskThreshold: engine.atRiskThreshold)
+                                if let url = engine.getVideoURL(athleteId: athleteID, date: s.date) {
+                                    Button {
+                                        videoPlayerURL = url
+                                        showVideoPlayer = true
+                                    } label: {
+                                        Image(systemName: "play.circle.fill")
+                                            .font(.title3).foregroundStyle(Color.brand)
+                                    }.padding(.leading, 8)
+                                }
+                            }
                         }
                     }
                     .padding(16)
@@ -1671,6 +1798,43 @@ struct AthleteDetailView: View {
         .onAppear {
             withAnimation(.easeOut(duration: 0.5).delay(0.2)) { chartsAppeared = true }
             withAnimation(.easeOut(duration: 0.4).delay(0.4)) { statsAppeared = true }
+        }
+        .sheet(isPresented: $showAddInjuryNote) {
+            NavigationStack {
+                ZStack {
+                    Color.bgPrimary.ignoresSafeArea()
+                    VStack(spacing: 20) {
+                        Text("Add Injury Note")
+                            .font(.headline).foregroundStyle(.white)
+                        TextField("e.g. ACL tear 2023, Ankle sprain Week 3", text: $newInjuryNote)
+                            .padding(14).background(Color.bgCard).cornerRadius(12)
+                            .foregroundStyle(.white)
+                        Spacer()
+                    }.padding(24)
+                }
+                .toolbar {
+                    ToolbarItem(placement: .cancellationAction) {
+                        Button("Cancel") { showAddInjuryNote = false; newInjuryNote = "" }
+                            .foregroundStyle(Color.textSecondary)
+                    }
+                    ToolbarItem(placement: .confirmationAction) {
+                        Button("Save") {
+                            if !newInjuryNote.isEmpty {
+                                engine.addInjuryNote(athleteId: athleteID, note: newInjuryNote)
+                            }
+                            newInjuryNote = ""
+                            showAddInjuryNote = false
+                        }
+                        .foregroundStyle(newInjuryNote.isEmpty ? Color.textSecondary : Color.brand)
+                        .disabled(newInjuryNote.isEmpty)
+                    }
+                }
+            }.presentationDetents([.medium])
+        }
+        .sheet(isPresented: $showVideoPlayer) {
+            if let url = videoPlayerURL {
+                VideoPlayerSheet(url: url)
+            }
         }
     }
 }
@@ -1715,6 +1879,113 @@ struct SessionHistoryRow: View {
                 .font(.caption.bold()).foregroundStyle(valueColor)
                 .frame(width: 44, alignment: .trailing)
         }
+    }
+}
+
+// MARK: - Video Player
+struct VideoPlayerSheet: View {
+    let url: URL
+    var body: some View {
+        VideoPlayer(player: AVPlayer(url: url))
+            .ignoresSafeArea()
+    }
+}
+
+// MARK: - Camera Guide View
+struct CameraGuideView: View {
+    let onReady: () -> Void
+    let onCancel: () -> Void
+    @State private var step = 1
+    
+    var body: some View {
+        ZStack {
+            Color.black.ignoresSafeArea()
+            
+            VStack(spacing: 24) {
+                // Top bar
+                HStack {
+                    Button("Cancel") { onCancel() }
+                        .foregroundStyle(Color.textSecondary)
+                    Spacer()
+                    Text("Recording Guide").font(.headline).foregroundStyle(.white)
+                    Spacer()
+                    Text("").frame(width: 50) // spacer for alignment
+                }.padding()
+                
+                Spacer()
+                
+                // Guide content
+                VStack(spacing: 20) {
+                    // Silhouette guide
+                    ZStack {
+                        RoundedRectangle(cornerRadius: 16)
+                            .stroke(Color.brand.opacity(0.5), style: StrokeStyle(lineWidth: 2, dash: [8, 4]))
+                            .frame(width: 200, height: 300)
+                        
+                        // Stick figure silhouette showing where athlete should be
+                        Image(systemName: "figure.stand")
+                            .font(.system(size: 100))
+                            .foregroundStyle(Color.brand.opacity(0.3))
+                        
+                        // Knee markers
+                        Circle()
+                            .fill(Color.brand.opacity(0.6))
+                            .frame(width: 12, height: 12)
+                            .offset(x: -8, y: 35)
+                            .shadow(color: Color.brand, radius: 6)
+                        Circle()
+                            .fill(Color.brand.opacity(0.6))
+                            .frame(width: 12, height: 12)
+                            .offset(x: 8, y: 35)
+                            .shadow(color: Color.brand, radius: 6)
+                    }
+                    
+                    // Instructions
+                    VStack(spacing: 12) {
+                        GuidePoint(number: 1, text: "Position athlete 8-10 feet away, facing the camera")
+                        GuidePoint(number: 2, text: "Ensure FULL BODY is visible — head to feet")
+                        GuidePoint(number: 3, text: "Keep phone STEADY (use both hands or a tripod)")
+                        GuidePoint(number: 4, text: "Athlete performs a Drop Vertical Jump (step off box → land → jump)")
+                        GuidePoint(number: 5, text: "Good lighting — avoid backlit / dark environments")
+                    }
+                }
+                
+                Spacer()
+                
+                // Ready button
+                Button {
+                    Haptics.medium()
+                    onReady()
+                } label: {
+                    HStack {
+                        Image(systemName: "video.fill")
+                        Text("I'm Ready — Start Recording")
+                    }
+                    .font(.headline)
+                    .frame(maxWidth: .infinity).padding(16)
+                    .background(Color.brand)
+                    .foregroundStyle(.black)
+                    .cornerRadius(14)
+                }.padding(.horizontal, 24)
+                
+                Spacer().frame(height: 30)
+            }
+        }
+    }
+}
+
+struct GuidePoint: View {
+    let number: Int
+    let text: String
+    var body: some View {
+        HStack(alignment: .top, spacing: 12) {
+            ZStack {
+                Circle().fill(Color.brand.opacity(0.2)).frame(width: 24, height: 24)
+                Text("\(number)").font(.caption.bold()).foregroundStyle(Color.brand)
+            }
+            Text(text).font(.subheadline).foregroundStyle(.white).fixedSize(horizontal: false, vertical: true)
+            Spacer()
+        }.padding(.horizontal, 24)
     }
 }
 
@@ -1774,6 +2045,8 @@ struct CaptureFlowView: View {
     @State private var actionSheetItemID: UUID? = nil
     @State private var cameraPermissionDenied = false
     @State private var sessionNotes = ""
+    @State private var showCameraGuide = false
+    @State private var cameraGuideAthleteID: UUID? = nil
 
     var body: some View {
         NavigationStack {
@@ -1836,6 +2109,19 @@ struct CaptureFlowView: View {
                 Button("Cancel", role: .cancel) {}
             } message: {
                 Text("Please enable camera access in Settings to record landing videos.")
+            }
+            .fullScreenCover(isPresented: $showCameraGuide) {
+                CameraGuideView(
+                    onReady: {
+                        showCameraGuide = false
+                        if let id = cameraGuideAthleteID {
+                            checkCameraAndRecord(for: id)
+                        }
+                    },
+                    onCancel: {
+                        showCameraGuide = false
+                    }
+                )
             }
         }
     }
@@ -1979,7 +2265,10 @@ struct CaptureFlowView: View {
             }
             .confirmationDialog("Add Video", isPresented: $showVideoActionSheet, titleVisibility: .visible) {
                 Button("Record with Camera") {
-                    if let id = actionSheetItemID { checkCameraAndRecord(for: id) }
+                    if let id = actionSheetItemID {
+                        cameraGuideAthleteID = id
+                        showCameraGuide = true
+                    }
                 }
                 Button("Choose from Library") {
                     if let id = actionSheetItemID {
@@ -2133,11 +2422,12 @@ struct CaptureFlowView: View {
                     captureItems[i].processing = false
                     captureItems[i].done = true
                 }
+                // When CVModelService.useMock = false, this will call the real API
                 let valgus = Double.random(in: 5.5...10.5)
                 captureItems[i].resultMetrics = ModelMetrics(
                     valgusAngle: valgus, kneeFlexionAngle: Double.random(in: 48...62),
                     trunkLean: Double.random(in: 3...12), asymmetry: Double.random(in: 2...15),
-                    lessScore: Int.random(in: 55...95)
+                    lessScore: Int.random(in: 2...8)
                 )
                 // Persist session data
                 if let idx = engine.athletes.firstIndex(where: { $0.id == captureItems[i].id }) {
@@ -2145,6 +2435,10 @@ struct CaptureFlowView: View {
                         DataPoint(date: selectedDate, value: valgus, isFresh: isFresh)
                     )
                     engine.save()
+                    // Save video URL if available
+                    if let videoURL = captureItems[i].videoURL {
+                        engine.saveVideoURL(videoURL, athleteId: captureItems[i].id, date: selectedDate)
+                    }
                     // Check for At Risk notification
                     if !isFresh {
                         let r = engine.readiness(for: engine.athletes[idx])
@@ -2591,7 +2885,7 @@ struct SettingsView: View {
                         // About
                         SettingsSection(title: "ABOUT") {
                             SettingsRow(icon: "info.circle", label: "Version") {
-                                Text("3.1.0").foregroundStyle(Color.textSecondary)
+                                Text("3.2.0").foregroundStyle(Color.textSecondary)
                             }
                             SettingsRow(icon: "hammer", label: "Build") {
                                 Text("2025.07").foregroundStyle(Color.textSecondary)
