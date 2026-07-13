@@ -112,14 +112,22 @@ class DataEngine {
     var cautionThreshold: Double = 10.0
     var atRiskThreshold: Double = 18.0
 
-    @ObservationIgnored
-    @AppStorage("hasCompletedOnboarding") var hasCompletedOnboarding = false
-    @ObservationIgnored
-    @AppStorage("teamName") var storedTeamName = ""
-    @ObservationIgnored
-    @AppStorage("coachName") var storedCoachName = ""
-    @ObservationIgnored
-    @AppStorage("sportType") var storedSportType = ""
+    var hasCompletedOnboarding: Bool {
+        get { UserDefaults.standard.bool(forKey: "hasCompletedOnboarding") }
+        set { UserDefaults.standard.set(newValue, forKey: "hasCompletedOnboarding") }
+    }
+    var storedTeamName: String {
+        get { UserDefaults.standard.string(forKey: "teamName") ?? "" }
+        set { UserDefaults.standard.set(newValue, forKey: "teamName") }
+    }
+    var storedCoachName: String {
+        get { UserDefaults.standard.string(forKey: "coachName") ?? "" }
+        set { UserDefaults.standard.set(newValue, forKey: "coachName") }
+    }
+    var storedSportType: String {
+        get { UserDefaults.standard.string(forKey: "sportType") ?? "" }
+        set { UserDefaults.standard.set(newValue, forKey: "sportType") }
+    }
 
     init() {
         if let saved = PersistenceManager.loadAthletes(), !saved.isEmpty {
@@ -263,13 +271,18 @@ struct BuddyAppApp: App {
                 if engine.isSignedIn {
                     if engine.hasCompletedOnboarding {
                         MainTabView()
+                            .transition(.opacity.combined(with: .move(edge: .trailing)))
                     } else {
                         TeamSetupView()
+                            .transition(.opacity.combined(with: .move(edge: .trailing)))
                     }
                 } else {
                     OnboardingView()
+                        .transition(.opacity)
                 }
             }
+            .animation(.easeInOut(duration: 0.4), value: engine.isSignedIn)
+            .animation(.easeInOut(duration: 0.4), value: engine.hasCompletedOnboarding)
             .environment(engine)
             .preferredColorScheme(.dark)
         }
@@ -373,6 +386,7 @@ struct TeamSetupView: View {
 
 // MARK: - Main Tab View
 struct MainTabView: View {
+    @State private var appeared = false
     var body: some View {
         TabView {
             DashboardView().tabItem { Label("Home", systemImage: "house.fill") }
@@ -381,6 +395,8 @@ struct MainTabView: View {
             HistoryView().tabItem { Label("History", systemImage: "clock.fill") }
             SettingsView().tabItem { Label("Settings", systemImage: "gearshape.fill") }
         }.tint(Color.brand)
+        .opacity(appeared ? 1.0 : 0.0)
+        .onAppear { withAnimation(.easeInOut(duration: 0.3)) { appeared = true } }
     }
 }
 
@@ -530,6 +546,7 @@ struct StatusBadge: View {
             .padding(.horizontal, 8).padding(.vertical, 3)
             .background(color.opacity(0.2)).foregroundStyle(color)
             .cornerRadius(6)
+            .animation(.spring(response: 0.4, dampingFraction: 0.7), value: status.rawValue)
     }
 }
 
@@ -614,9 +631,10 @@ struct DashboardView: View {
                         ForEach(engine.allReadiness) { r in
                             NavigationLink(value: r.id) {
                                 AthleteRow(readiness: r)
-                            }
+                            }.buttonStyle(CardPressStyle())
                         }
                     }.padding(.horizontal)
+                    .animation(.spring(response: 0.3, dampingFraction: 0.8), value: engine.allReadiness.map(\.fatigueDegradationPct))
                 }
                 .padding(.vertical)
             }
@@ -665,12 +683,22 @@ struct AthleteRow: View {
     }
 }
 
+// MARK: - Card Press Style
+struct CardPressStyle: ButtonStyle {
+    func makeBody(configuration: Configuration) -> some View {
+        configuration.label
+            .scaleEffect(configuration.isPressed ? 0.97 : 1.0)
+            .animation(.easeInOut(duration: 0.15), value: configuration.isPressed)
+    }
+}
+
 
 // MARK: - Athlete Detail
 struct AthleteDetailView: View {
     @Environment(DataEngine.self) private var engine
     let athleteID: UUID
     private var r: AthleteReadiness? { engine.allReadiness.first { $0.id == athleteID } }
+    @State private var chartsVisible = false
 
     var body: some View {
         ScrollView {
@@ -693,10 +721,19 @@ struct AthleteDetailView: View {
                     // Valgus chart with fresh/fatigued markers
                     LineChartView(data: r.valgusHistory, baselineValue: r.baselineValgus, lineColor: .brand, title: "Knee Valgus", unit: "degrees", showFreshFatigued: true)
                         .padding(.horizontal)
+                        .opacity(chartsVisible ? 1.0 : 0.0)
+                        .offset(y: chartsVisible ? 0 : 10)
+                        .animation(.easeOut(duration: 0.4).delay(0.1), value: chartsVisible)
                     LineChartView(data: r.flexionHistory, baselineValue: 55.0, lineColor: Color.statusGreen, title: "Knee Flexion", unit: "degrees")
                         .padding(.horizontal)
+                        .opacity(chartsVisible ? 1.0 : 0.0)
+                        .offset(y: chartsVisible ? 0 : 10)
+                        .animation(.easeOut(duration: 0.4).delay(0.2), value: chartsVisible)
                     LineChartView(data: r.deltaHistory, baselineValue: 0, lineColor: Color.statusRed, title: "Fatigue Delta", unit: "% degradation")
                         .padding(.horizontal)
+                        .opacity(chartsVisible ? 1.0 : 0.0)
+                        .offset(y: chartsVisible ? 0 : 10)
+                        .animation(.easeOut(duration: 0.4).delay(0.3), value: chartsVisible)
 
                     // Stats grid
                     LazyVGrid(columns: [GridItem(.flexible()), GridItem(.flexible())], spacing: 12) {
@@ -723,12 +760,14 @@ struct AthleteDetailView: View {
                         }
                     }.padding()
                 }
+                .transition(.opacity)
             } else {
                 Text("Athlete not found").foregroundStyle(Color.textSecondary)
             }
         }
         .background(Color.bgPrimary)
         .navigationBarTitleDisplayMode(.inline)
+        .onAppear { chartsVisible = true }
     }
 }
 
@@ -795,7 +834,7 @@ struct CaptureFlowView: View {
     @State private var captureItems: [CaptureItem] = []
     @State private var consentGiven = false
     @State private var analyzing = false
-    @State private var showCameraFor: UUID? = nil
+    @State private var showCameraFor: CameraSheetItem? = nil
     @State private var cameraSourceType: UIImagePickerController.SourceType = .camera
     @State private var showVideoActionSheet = false
     @State private var actionSheetItemID: UUID? = nil
@@ -815,18 +854,19 @@ struct CaptureFlowView: View {
 
                     ScrollView {
                         VStack(spacing: 20) {
-                            if step == 1 { captureStep1 }
-                            else if step == 2 { captureStep2 }
-                            else if step == 3 { captureStep3 }
-                            else { captureStep4 }
+                            if step == 1 { captureStep1.transition(.asymmetric(insertion: .move(edge: .trailing).combined(with: .opacity), removal: .move(edge: .leading).combined(with: .opacity))) }
+                            else if step == 2 { captureStep2.transition(.asymmetric(insertion: .move(edge: .trailing).combined(with: .opacity), removal: .move(edge: .leading).combined(with: .opacity))) }
+                            else if step == 3 { captureStep3.transition(.asymmetric(insertion: .move(edge: .trailing).combined(with: .opacity), removal: .move(edge: .leading).combined(with: .opacity))) }
+                            else { captureStep4.transition(.asymmetric(insertion: .move(edge: .trailing).combined(with: .opacity), removal: .move(edge: .leading).combined(with: .opacity))) }
                         }.padding()
+                        .animation(.easeInOut(duration: 0.3), value: step)
                     }
                 }
             }
             .navigationTitle("Capture")
-            .fullScreenCover(item: $showCameraFor) { itemID in
+            .fullScreenCover(item: $showCameraFor) { sheetItem in
                 CameraView(sourceType: cameraSourceType) { url in
-                    if let url = url, let idx = captureItems.firstIndex(where: { $0.id == itemID }) {
+                    if let url = url, let idx = captureItems.firstIndex(where: { $0.id == sheetItem.id }) {
                         captureItems[idx].videoURL = url
                         captureItems[idx].videoAttached = true
                         captureItems[idx].thumbnail = generateThumbnail(from: url)
@@ -852,11 +892,11 @@ struct CaptureFlowView: View {
         switch status {
         case .authorized:
             cameraSourceType = .camera
-            showCameraFor = id
+            showCameraFor = CameraSheetItem(id: id)
         case .notDetermined:
             AVCaptureDevice.requestAccess(for: .video) { granted in
                 DispatchQueue.main.async {
-                    if granted { cameraSourceType = .camera; showCameraFor = id }
+                    if granted { cameraSourceType = .camera; showCameraFor = CameraSheetItem(id: id) }
                     else { cameraPermissionDenied = true }
                 }
             }
@@ -899,7 +939,7 @@ struct CaptureFlowView: View {
                     guard let a = engine.athletes.first(where: { $0.id == id }) else { return nil }
                     return CaptureItem(id: a.id, name: a.name)
                 }
-                step = 2
+                withAnimation(.easeInOut(duration: 0.3)) { step = 2 }
             } label: {
                 Text("Next →").frame(maxWidth: .infinity).padding()
                     .background(selectedAthleteIDs.isEmpty ? Color.cardBg : Color.brand)
@@ -949,7 +989,7 @@ struct CaptureFlowView: View {
                 Button("Upload from Library") {
                     if let id = actionSheetItemID {
                         cameraSourceType = .photoLibrary
-                        showCameraFor = id
+                        showCameraFor = CameraSheetItem(id: id)
                     }
                 }
                 Button("Cancel", role: .cancel) {}
@@ -966,7 +1006,7 @@ struct CaptureFlowView: View {
 
             let allAttached = captureItems.allSatisfy(\.videoAttached)
             Button {
-                step = 3; startAnalysis()
+                withAnimation(.easeInOut(duration: 0.3)) { step = 3 }; startAnalysis()
             } label: {
                 Text("Analyze Landing →").frame(maxWidth: .infinity).padding()
                     .background(allAttached && consentGiven ? Color.brand : Color.cardBg)
@@ -974,7 +1014,7 @@ struct CaptureFlowView: View {
                     .cornerRadius(12).bold()
             }.disabled(!allAttached || !consentGiven)
 
-            Button("← Back") { step = 1 }.font(.caption).foregroundStyle(Color.textSecondary)
+            Button("← Back") { withAnimation(.easeInOut(duration: 0.3)) { step = 1 } }.font(.caption).foregroundStyle(Color.textSecondary)
         }
     }
 
@@ -987,7 +1027,10 @@ struct CaptureFlowView: View {
                     Text(item.name).foregroundStyle(.white)
                     Spacer()
                     if item.done {
-                        Image(systemName: "checkmark.circle.fill").foregroundStyle(Color.statusGreen)
+                        Image(systemName: "checkmark.circle.fill")
+                            .foregroundStyle(Color.statusGreen)
+                            .scaleEffect(item.done ? 1.0 : 0.0)
+                            .animation(.spring(response: 0.3, dampingFraction: 0.6), value: item.done)
                     } else if item.processing {
                         ProgressView().tint(Color.brand)
                     } else {
@@ -996,7 +1039,7 @@ struct CaptureFlowView: View {
                 }.padding(12).background(Color.cardBg).cornerRadius(10)
             }
             if captureItems.allSatisfy(\.done) {
-                Button { step = 4 } label: {
+                Button { withAnimation(.easeInOut(duration: 0.3)) { step = 4 } } label: {
                     Text("View Results →").frame(maxWidth: .infinity).padding()
                         .background(Color.brand).foregroundStyle(.black).cornerRadius(12).bold()
                 }
@@ -1029,7 +1072,7 @@ struct CaptureFlowView: View {
             }
 
             Button {
-                step = 1; captureItems = []; selectedAthleteIDs = []; consentGiven = false
+                withAnimation(.easeInOut(duration: 0.3)) { step = 1 }; captureItems = []; selectedAthleteIDs = []; consentGiven = false
             } label: {
                 Text("Done").frame(maxWidth: .infinity).padding()
                     .background(Color.brand).foregroundStyle(.black).cornerRadius(12).bold()
@@ -1059,9 +1102,9 @@ struct CaptureFlowView: View {
 }
 
 
-// MARK: - Identifiable UUID extension for fullScreenCover
-extension UUID: @retroactive Identifiable {
-    public var id: UUID { self }
+// MARK: - Camera Sheet Item (replaces @retroactive Identifiable on UUID)
+struct CameraSheetItem: Identifiable {
+    let id: UUID
 }
 
 // MARK: - Roster (with status badges)
@@ -1140,7 +1183,7 @@ struct RosterView: View {
 // MARK: - History
 struct HistoryView: View {
     @Environment(DataEngine.self) private var engine
-    @State private var selectedSession: (Date, Bool)? = nil
+    @State private var selectedSessionSheet: SessionSheetID? = nil
 
     private var groupedSessions: [(date: Date, isFresh: Bool, count: Int)] {
         var result: [(Date, Bool, Int)] = []
@@ -1169,7 +1212,7 @@ struct HistoryView: View {
                     List {
                         ForEach(groupedSessions, id: \.date) { session in
                             Button {
-                                selectedSession = (session.date, session.isFresh)
+                                selectedSessionSheet = SessionSheetID(date: session.date, isFresh: session.isFresh)
                             } label: {
                                 HStack {
                                     VStack(alignment: .leading, spacing: 3) {
@@ -1190,10 +1233,7 @@ struct HistoryView: View {
                 }
             }
             .navigationTitle("History")
-            .sheet(item: Binding(
-                get: { selectedSession.map { SessionSheetID(date: $0.0, isFresh: $0.1) } },
-                set: { _ in selectedSession = nil }
-            )) { item in
+            .sheet(item: $selectedSessionSheet) { item in
                 SessionDetailSheet(date: item.date, isFresh: item.isFresh)
             }
         }
