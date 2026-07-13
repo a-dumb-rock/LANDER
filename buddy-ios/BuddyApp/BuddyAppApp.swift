@@ -34,7 +34,7 @@ struct ModelMetrics {
 
 struct CaptureItem: Identifiable {
     let id: UUID
-    let name: String
+    var name: String
     var videoAttached: Bool = false
     var processing: Bool = false
     var done: Bool = false
@@ -52,7 +52,7 @@ struct Athlete: Identifiable {
 
 struct AthleteReadiness: Identifiable {
     let id: UUID
-    let name: String
+    var name: String
     let jersey: Int
     let position: String
     let fatigueDegradationPct: Double
@@ -410,9 +410,9 @@ struct DashboardView: View {
                     // Top metric cards
                     HStack(spacing: 12) {
                         MetricCard(title: "Team Score", value: "\(engine.teamScore)", subtitle: "/ 100", color: .brand)
-                        MetricCard(title: "This Week", value: "\(engine.weekSessionCount)", subtitle: "sessions", color: .statusGreen)
+                        MetricCard(title: "This Week", value: "\(engine.weekSessionCount)", subtitle: "sessions", color: Color.statusGreen)
                         if let mover = engine.biggestMover {
-                            MetricCard(title: "Biggest Mover", value: "\(Int(mover.fatigueDegradationPct))%", subtitle: mover.name.components(separatedBy: " ").first ?? "", color: .statusRed)
+                            MetricCard(title: "Biggest Mover", value: "\(Int(mover.fatigueDegradationPct))%", subtitle: mover.name.components(separatedBy: " ").first ?? "", color: Color.statusRed)
                         }
                     }.padding(.horizontal)
 
@@ -420,7 +420,7 @@ struct DashboardView: View {
                     let atRisk = engine.allReadiness.filter { $0.status == .atRisk }
                     if !atRisk.isEmpty {
                         HStack {
-                            Image(systemName: "exclamationmark.triangle.fill").foregroundStyle(.statusRed)
+                            Image(systemName: "exclamationmark.triangle.fill").foregroundStyle(Color.statusRed)
                             Text("\(atRisk.count) athlete\(atRisk.count > 1 ? "s" : "") at risk — tap for details")
                                 .font(.caption).foregroundStyle(.white)
                             Spacer()
@@ -480,7 +480,7 @@ struct AthleteRow: View {
             Spacer()
             // Sparkline
             SparklineView(points: readiness.deltaHistory.suffix(5).map(\.value),
-                color: readiness.trend == .worsening ? .statusRed : readiness.trend == .improving ? .statusGreen : .textSecondary)
+                color: readiness.trend == .worsening ? Color.statusRed : readiness.trend == .improving ? Color.statusGreen : Color.textSecondary)
                 .frame(width: 40, height: 20)
             VStack(alignment: .trailing, spacing: 3) {
                 Text("\(Int(readiness.fatigueDegradationPct))%").font(.subheadline.bold())
@@ -520,9 +520,9 @@ struct AthleteDetailView: View {
                     // Charts
                     LineChartView(data: r.valgusHistory, baselineValue: r.baselineValgus, lineColor: .brand, title: "Knee Valgus", unit: "degrees")
                         .padding(.horizontal)
-                    LineChartView(data: r.flexionHistory, baselineValue: 55.0, lineColor: .statusGreen, title: "Knee Flexion", unit: "degrees")
+                    LineChartView(data: r.flexionHistory, baselineValue: 55.0, lineColor: Color.statusGreen, title: "Knee Flexion", unit: "degrees")
                         .padding(.horizontal)
-                    LineChartView(data: r.deltaHistory, baselineValue: 0, lineColor: .statusRed, title: "Fatigue Delta", unit: "% degradation")
+                    LineChartView(data: r.deltaHistory, baselineValue: 0, lineColor: Color.statusRed, title: "Fatigue Delta", unit: "% degradation")
                         .padding(.horizontal)
 
                     // Stats grid
@@ -894,7 +894,7 @@ struct HistoryView: View {
 
     private var groupedSessions: [(date: Date, isFresh: Bool, count: Int)] {
         var result: [(Date, Bool, Int)] = []
-        let allDates = Set(engine.athletes.flatMap(\.sessions).map { ($0.date, $0.isFresh) }.map { "\($0.0.timeIntervalSince1970)-\($0.1)" })
+        let _ = Set(engine.athletes.flatMap(\.sessions).map { ($0.date, $0.isFresh) }.map { "\($0.0.timeIntervalSince1970)-\($0.1)" })
         for athlete in engine.athletes {
             for s in athlete.sessions {
                 let key = "\(s.date.timeIntervalSince1970)-\(s.isFresh)"
