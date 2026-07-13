@@ -3,6 +3,8 @@ import AuthenticationServices
 import AVFoundation
 import AVKit
 import UserNotifications
+import UIKit
+import PhotosUI
 
 // NOTE: Info.plist must include:
 // NSCameraUsageDescription - "LANDER Buddy needs camera access to record landing videos for analysis."
@@ -19,6 +21,14 @@ extension Color {
     static let statusYellow = Color(red: 1.0, green: 0.8, blue: 0.0)
     static let statusRed = Color(red: 1.0, green: 0.3, blue: 0.3)
     static let textSecondary = Color(white: 0.55)
+}
+
+// MARK: - Haptics
+enum Haptics {
+    static func light() { UIImpactFeedbackGenerator(style: .light).impactOccurred() }
+    static func medium() { UIImpactFeedbackGenerator(style: .medium).impactOccurred() }
+    static func success() { UINotificationFeedbackGenerator().notificationOccurred(.success) }
+    static func warning() { UINotificationFeedbackGenerator().notificationOccurred(.warning) }
 }
 
 // MARK: - Data Models
@@ -65,6 +75,7 @@ struct Athlete: Identifiable, Codable {
     var jersey: Int
     var position: String
     var sessions: [DataPoint]
+    var photoData: Data?
 }
 
 struct AthleteReadiness: Identifiable, Equatable {
@@ -126,6 +137,7 @@ class DataEngine {
     var cautionThreshold: Double = 10.0
     var atRiskThreshold: Double = 18.0
     var showSplash = false
+    var sessionNotes: [String: String] = [:] // key: "dateInterval-isFresh"
 
     var hasCompletedOnboarding: Bool {
         get { UserDefaults.standard.bool(forKey: "hasCompletedOnboarding") }
@@ -157,9 +169,34 @@ class DataEngine {
         if !storedTeamName.isEmpty { teamName = storedTeamName }
         if !storedCoachName.isEmpty { userName = storedCoachName }
         if !storedSportType.isEmpty { sportType = storedSportType }
+        loadSessionNotes()
     }
 
     func save() { PersistenceManager.saveAthletes(athletes) }
+
+    func noteKey(for date: Date, isFresh: Bool) -> String {
+        "\(Int(date.timeIntervalSince1970 / 86400))-\(isFresh)"
+    }
+
+    func saveNote(_ note: String, date: Date, isFresh: Bool) {
+        let key = noteKey(for: date, isFresh: isFresh)
+        sessionNotes[key] = note
+        if let data = try? JSONEncoder().encode(sessionNotes) {
+            UserDefaults.standard.set(data, forKey: "sessionNotes")
+        }
+    }
+
+    func getNote(date: Date, isFresh: Bool) -> String {
+        let key = noteKey(for: date, isFresh: isFresh)
+        return sessionNotes[key] ?? ""
+    }
+
+    private func loadSessionNotes() {
+        if let data = UserDefaults.standard.data(forKey: "sessionNotes"),
+           let decoded = try? JSONDecoder().decode([String: String].self, from: data) {
+            sessionNotes = decoded
+        }
+    }
 
 
     func loadDemoData() {
@@ -305,6 +342,7 @@ class DataEngine {
 
     func scheduleAtRiskNotification(name: String, degradation: Int) {
         guard notificationsEnabled else { return }
+        Haptics.warning()
         let content = UNMutableNotificationContent()
         content.title = "Landing Risk Alert"
         content.body = "\(name)'s landing degraded \(degradation)% — review recommended"
@@ -715,6 +753,7 @@ struct OnboardingView: View {
     }
 
     private func triggerSignIn() {
+        Haptics.success()
         engine.showSplash = true
         engine.isSignedIn = true
     }
@@ -807,13 +846,20 @@ struct MainTabView: View {
         TabView {
             DashboardView().tabItem { Label("Home", systemImage: "house.fill") }
             RosterView().tabItem { Label("Roster", systemImage: "person.3.fill") }
-            CaptureFlowView().tabItem { Label("Capture", systemImage: "camera.fill") }
+            CaptureFlowView().tabItem { Label("Capture", systemImage: "camera.circle.fill") }
             HistoryView().tabItem { Label("History", systemImage: "clock.fill") }
             SettingsView().tabItem { Label("Settings", systemImage: "gearshape.fill") }
         }
         .tint(Color.brand)
         .opacity(appeared ? 1.0 : 0.0)
-        .onAppear { withAnimation(.easeInOut(duration: 0.4)) { appeared = true } }
+        .onAppear {
+            withAnimation(.easeInOut(duration: 0.4)) { appeared = true }
+            let appearance = UITabBarAppearance()
+            appearance.configureWithOpaqueBackground()
+            appearance.backgroundColor = UIColor(Color.bgPrimary)
+            UITabBar.appearance().standardAppearance = appearance
+            UITabBar.appearance().scrollEdgeAppearance = appearance
+        }
     }
 }
 
@@ -992,6 +1038,7 @@ struct LineChartView: View {
     let unit: String
     var showFreshFatigued: Bool = false
     @State private var appeared = false
+    @State private var selectedIndex: Int? = nil
 
     var body: some View {
         VStack(alignment: .leading, spacing: 6) {
@@ -1046,6 +1093,29 @@ struct LineChartView: View {
                             }
                         }
 
+                        // Selected point tooltip
+                        if let idx = selectedIndex, idx < data.count {
+                            let x = w * CGFloat(idx) / CGFloat(max(data.count - 1, 1))
+                            let val = values[idx]
+                            let y = h * (1 - CGFloat((val - mn) / range))
+                            // Vertical indicator line
+                            Path { p in p.move(to: CGPoint(x: x, y: 0)); p.addLine(to: CGPoint(x: x, y: h)) }
+                                .stroke(lineColor.opacity(0.4), style: StrokeStyle(lineWidth: 1, dash: [3, 2]))
+                            // Dot
+                            Circle().fill(lineColor).frame(width: 8, height: 8).position(x: x, y: y)
+                            // Tooltip
+                            VStack(spacing: 2) {
+                                Text(String(format: "%.1f", val) + " " + unit)
+                                    .font(.system(size: 10, weight: .bold)).foregroundStyle(.white)
+                                Text(data[idx].date, format: .dateTime.month(.abbreviated).day())
+                                    .font(.system(size: 8)).foregroundStyle(Color.textSecondary)
+                            }
+                            .padding(.horizontal, 6).padding(.vertical, 4)
+                            .background(Color.bgCard.opacity(0.95))
+                            .cornerRadius(6)
+                            .position(x: min(max(x, 40), w - 40), y: max(y - 28, 20))
+                        }
+
                         // Baseline dashed line
                         if let bl = baselineValue {
                             let by = h * (1 - CGFloat((bl - mn) / range))
@@ -1053,6 +1123,19 @@ struct LineChartView: View {
                                 .stroke(Color.textSecondary.opacity(0.6), style: StrokeStyle(lineWidth: 1, dash: [5, 4]))
                         }
                     }
+                    .gesture(
+                        DragGesture(minimumDistance: 0)
+                            .onEnded { value in
+                                let tapX = value.location.x
+                                guard data.count > 1 else { return }
+                                let stepWidth = w / CGFloat(data.count - 1)
+                                let index = Int(round(tapX / stepWidth))
+                                let clampedIndex = max(0, min(data.count - 1, index))
+                                withAnimation(.easeOut(duration: 0.2)) {
+                                    selectedIndex = (selectedIndex == clampedIndex) ? nil : clampedIndex
+                                }
+                            }
+                    )
                 }.frame(height: 130)
             }
             // X-axis labels
@@ -1103,77 +1186,136 @@ struct DashboardView: View {
     @State private var alertAppeared = false
     @State private var trendAppeared = false
     @State private var listAppeared = false
+    @State private var refreshID = UUID()
+    @State private var showWalkthrough = false
+    @State private var walkthroughStep = 1
+
+    private var weekComparison: (thisWeek: Double, lastWeek: Double, improved: Bool) {
+        let trend = engine.teamDeltaTrend
+        guard trend.count >= 2 else { return (0, 0, true) }
+        let midpoint = trend.count / 2
+        let lastWeekSlice = trend.prefix(midpoint)
+        let thisWeekSlice = trend.suffix(from: midpoint)
+        let lastAvg = lastWeekSlice.isEmpty ? 0 : lastWeekSlice.map(\.value).reduce(0, +) / Double(lastWeekSlice.count)
+        let thisAvg = thisWeekSlice.isEmpty ? 0 : thisWeekSlice.map(\.value).reduce(0, +) / Double(thisWeekSlice.count)
+        return (thisAvg, lastAvg, thisAvg <= lastAvg)
+    }
 
     var body: some View {
         NavigationStack {
-            ScrollView {
-                VStack(spacing: 18) {
-                    // Hero Card: Team Readiness Score with circular progress ring
-                    HeroScoreCard(score: engine.teamScore, summary: engine.statusSummary)
-                        .padding(.horizontal)
-                        .opacity(heroAppeared ? 1 : 0)
-                        .offset(y: heroAppeared ? 0 : 16)
+            ZStack {
+                ScrollView {
+                    VStack(spacing: 18) {
+                        // Hero Card: Team Readiness Score with circular progress ring
+                        HeroScoreCard(score: engine.teamScore, summary: engine.statusSummary)
+                            .padding(.horizontal)
+                            .opacity(heroAppeared ? 1 : 0)
+                            .offset(y: heroAppeared ? 0 : 16)
 
-                    // Alert Section: At Risk athletes
-                    let atRiskAthletes = engine.allReadiness.filter { $0.status == .atRisk }
-                    if !atRiskAthletes.isEmpty {
-                        VStack(spacing: 8) {
-                            ForEach(atRiskAthletes) { athlete in
-                                AlertCard(readiness: athlete)
-                            }
-                        }
-                        .padding(.horizontal)
-                        .opacity(alertAppeared ? 1 : 0)
-                        .offset(y: alertAppeared ? 0 : 12)
-                    }
-
-                    // Team Trend Area Chart
-                    if engine.teamDeltaTrend.count > 1 {
-                        VStack(alignment: .leading, spacing: 8) {
-                            HStack {
-                                Text("Team Avg Fatigue Delta")
-                                    .font(.caption.bold()).foregroundStyle(Color.textSecondary)
+                        // Weekly Comparison Card (#6)
+                        let comp = weekComparison
+                        if engine.teamDeltaTrend.count >= 2 {
+                            HStack(spacing: 12) {
+                                Image(systemName: comp.improved ? "arrow.down.right.circle.fill" : "arrow.up.right.circle.fill")
+                                    .font(.title2)
+                                    .foregroundStyle(comp.improved ? Color.statusGreen : Color.statusRed)
+                                VStack(alignment: .leading, spacing: 2) {
+                                    Text("This Week vs Last Week")
+                                        .font(.caption.bold()).foregroundStyle(Color.textSecondary)
+                                    let diff = abs(comp.thisWeek - comp.lastWeek)
+                                    Text(comp.improved
+                                         ? "↓ \(String(format: "%.0f", diff))% better than last week"
+                                         : "↑ \(String(format: "%.0f", diff))% worse than last week")
+                                        .font(.subheadline.bold())
+                                        .foregroundStyle(comp.improved ? Color.statusGreen : Color.statusRed)
+                                }
                                 Spacer()
-                                Text("6 weeks")
-                                    .font(.system(size: 10, weight: .medium))
-                                    .foregroundStyle(Color.brand.opacity(0.7))
-                                    .padding(.horizontal, 8).padding(.vertical, 3)
-                                    .background(Color.brand.opacity(0.1))
-                                    .clipShape(Capsule())
                             }
-                            AreaChartView(data: engine.teamDeltaTrend, lineColor: .brand)
-                                .frame(height: 110)
+                            .padding(14)
+                            .background(Color.bgCard)
+                            .cornerRadius(14)
+                            .padding(.horizontal)
                         }
-                        .padding(14)
-                        .background(Color.bgCard)
-                        .cornerRadius(14)
-                        .padding(.horizontal)
-                        .opacity(trendAppeared ? 1 : 0)
-                        .offset(y: trendAppeared ? 0 : 12)
-                    }
 
-                    // Athlete List
-                    VStack(spacing: 10) {
-                        ForEach(engine.allReadiness) { r in
-                            NavigationLink(value: r.id) {
-                                AthleteRow(readiness: r)
-                            }.buttonStyle(CardPressStyle())
+                        // Alert Section: At Risk athletes
+                        let atRiskAthletes = engine.allReadiness.filter { $0.status == .atRisk }
+                        if !atRiskAthletes.isEmpty {
+                            VStack(spacing: 8) {
+                                ForEach(atRiskAthletes) { athlete in
+                                    AlertCard(readiness: athlete)
+                                }
+                            }
+                            .padding(.horizontal)
+                            .opacity(alertAppeared ? 1 : 0)
+                            .offset(y: alertAppeared ? 0 : 12)
                         }
+
+                        // Team Trend Area Chart
+                        if engine.teamDeltaTrend.count > 1 {
+                            VStack(alignment: .leading, spacing: 8) {
+                                HStack {
+                                    Text("Team Avg Fatigue Delta")
+                                        .font(.caption.bold()).foregroundStyle(Color.textSecondary)
+                                    Spacer()
+                                    Text("6 weeks")
+                                        .font(.system(size: 10, weight: .medium))
+                                        .foregroundStyle(Color.brand.opacity(0.7))
+                                        .padding(.horizontal, 8).padding(.vertical, 3)
+                                        .background(Color.brand.opacity(0.1))
+                                        .clipShape(Capsule())
+                                }
+                                AreaChartView(data: engine.teamDeltaTrend, lineColor: .brand)
+                                    .frame(height: 110)
+                            }
+                            .padding(14)
+                            .background(Color.bgCard)
+                            .cornerRadius(14)
+                            .padding(.horizontal)
+                            .opacity(trendAppeared ? 1 : 0)
+                            .offset(y: trendAppeared ? 0 : 12)
+                        }
+
+                        // Athlete List
+                        VStack(spacing: 10) {
+                            ForEach(engine.allReadiness) { r in
+                                NavigationLink(value: r.id) {
+                                    AthleteRow(readiness: r)
+                                }.buttonStyle(CardPressStyle())
+                            }
+                        }
+                        .padding(.horizontal)
+                        .opacity(listAppeared ? 1 : 0)
+                        .offset(y: listAppeared ? 0 : 10)
                     }
-                    .padding(.horizontal)
-                    .opacity(listAppeared ? 1 : 0)
-                    .offset(y: listAppeared ? 0 : 10)
+                    .padding(.vertical)
+                    .id(refreshID)
                 }
-                .padding(.vertical)
+                .refreshable {
+                    refreshID = UUID()
+                }
+                .background(Color.bgPrimary)
+
+                // Onboarding Walkthrough Overlay (#7)
+                if showWalkthrough {
+                    WalkthroughOverlay(step: $walkthroughStep) {
+                        showWalkthrough = false
+                        UserDefaults.standard.set(true, forKey: "hasSeenWalkthrough")
+                    }
+                }
             }
-            .refreshable { engine.resetDemo() }
-            .background(Color.bgPrimary)
             .navigationTitle("")
             .toolbar {
                 ToolbarItem(placement: .principal) {
                     Text("Dashboard")
                         .font(.system(size: 20, weight: .bold))
                         .foregroundStyle(.white)
+                }
+                ToolbarItem(placement: .topBarTrailing) {
+                    Button {
+                        shareTeamReport()
+                    } label: {
+                        Image(systemName: "square.and.arrow.up").foregroundStyle(Color.brand)
+                    }
                 }
             }
             .navigationDestination(for: UUID.self) { id in
@@ -1185,7 +1327,98 @@ struct DashboardView: View {
             withAnimation(.easeOut(duration: 0.4).delay(0.2)) { alertAppeared = true }
             withAnimation(.easeOut(duration: 0.4).delay(0.3)) { trendAppeared = true }
             withAnimation(.easeOut(duration: 0.4).delay(0.4)) { listAppeared = true }
+            if !UserDefaults.standard.bool(forKey: "hasSeenWalkthrough") {
+                DispatchQueue.main.asyncAfter(deadline: .now() + 0.8) {
+                    showWalkthrough = true
+                }
+            }
         }
+    }
+
+    private func shareTeamReport() {
+        let readiness = engine.allReadiness
+        var report = "LANDER Buddy — Team Report\n"
+        report += "Team: \(engine.teamName)\n"
+        report += "Score: \(engine.teamScore)/100\n\n"
+        for r in readiness {
+            report += "\(r.name) (#\(r.jersey)) — \(r.status.rawValue), \(Int(r.fatigueDegradationPct))% degradation\n"
+        }
+        let av = UIActivityViewController(activityItems: [report], applicationActivities: nil)
+        if let scene = UIApplication.shared.connectedScenes.first as? UIWindowScene,
+           let root = scene.windows.first?.rootViewController {
+            root.present(av, animated: true)
+        }
+    }
+}
+
+// MARK: - Walkthrough Overlay
+struct WalkthroughOverlay: View {
+    @Binding var step: Int
+    let onDismiss: () -> Void
+
+    private var title: String {
+        switch step {
+        case 1: return "Your Team Readiness Score"
+        case 2: return "Tap any athlete for detailed trends"
+        default: return "Record sessions in the Capture tab"
+        }
+    }
+    private var subtitle: String {
+        switch step {
+        case 1: return "This ring shows your team's overall landing health at a glance."
+        case 2: return "Each athlete card shows status, trend, and a sparkline of their fatigue delta."
+        default: return "Use the Capture tab to record landing videos and track biomechanics over time."
+        }
+    }
+
+    var body: some View {
+        ZStack {
+            Color.black.opacity(0.75).ignoresSafeArea()
+                .onTapGesture {} // block taps through
+
+            VStack(spacing: 20) {
+                Spacer()
+                VStack(spacing: 14) {
+                    Text(title)
+                        .font(.title3.bold()).foregroundStyle(.white)
+                        .multilineTextAlignment(.center)
+                    Text(subtitle)
+                        .font(.subheadline).foregroundStyle(Color.textSecondary)
+                        .multilineTextAlignment(.center)
+                        .padding(.horizontal, 24)
+
+                    HStack(spacing: 6) {
+                        ForEach(1...3, id: \.self) { s in
+                            Circle()
+                                .fill(s == step ? Color.brand : Color.textSecondary.opacity(0.4))
+                                .frame(width: 8, height: 8)
+                        }
+                    }.padding(.top, 4)
+
+                    Button {
+                        Haptics.light()
+                        if step < 3 {
+                            withAnimation(.easeOut(duration: 0.3)) { step += 1 }
+                        } else {
+                            onDismiss()
+                        }
+                    } label: {
+                        Text(step < 3 ? "Next" : "Got it")
+                            .font(.headline)
+                            .frame(maxWidth: .infinity).padding(14)
+                            .background(Color.brand).foregroundStyle(.black)
+                            .cornerRadius(12)
+                    }
+                    .padding(.horizontal, 40)
+                }
+                .padding(28)
+                .background(Color.bgCard)
+                .cornerRadius(20)
+                .padding(.horizontal, 24)
+                Spacer()
+            }
+        }
+        .transition(.opacity)
     }
 }
 
@@ -1337,7 +1570,11 @@ struct AthleteDetailView: View {
                 VStack(spacing: 18) {
                     // Sticky Header
                     VStack(spacing: 10) {
-                        JerseyCircle(number: r.jersey, size: 72, glowing: r.status == .atRisk)
+                        if let athlete = engine.athletes.first(where: { $0.id == athleteID }) {
+                            AthleteAvatarView(athlete: athlete, size: 72, glowing: r.status == .atRisk)
+                        } else {
+                            JerseyCircle(number: r.jersey, size: 72, glowing: r.status == .atRisk)
+                        }
                         Text(r.name).font(.title2.bold()).foregroundStyle(.white)
                         Text(r.position).font(.subheadline).foregroundStyle(Color.textSecondary)
                         HStack(spacing: 10) {
@@ -1536,6 +1773,7 @@ struct CaptureFlowView: View {
     @State private var showVideoActionSheet = false
     @State private var actionSheetItemID: UUID? = nil
     @State private var cameraPermissionDenied = false
+    @State private var sessionNotes = ""
 
     var body: some View {
         NavigationStack {
@@ -1652,6 +1890,7 @@ struct CaptureFlowView: View {
                 Text("Select Athletes").font(.subheadline.bold()).foregroundStyle(.white)
                 ForEach(engine.athletes) { a in
                     Button {
+                        Haptics.light()
                         withAnimation(.spring(response: 0.3, dampingFraction: 0.7)) {
                             if selectedAthleteIDs.contains(a.id) { selectedAthleteIDs.remove(a.id) }
                             else { selectedAthleteIDs.insert(a.id) }
@@ -1674,8 +1913,17 @@ struct CaptureFlowView: View {
                 }
             }
 
+            // Session Notes (#9)
+            VStack(alignment: .leading, spacing: 10) {
+                Text("Session Notes").font(.subheadline.bold()).foregroundStyle(.white)
+                TextField("Session notes (optional)", text: $sessionNotes)
+                    .padding(12).background(Color.bgCard).cornerRadius(10)
+                    .foregroundStyle(.white)
+            }
+
             Spacer().frame(height: 8)
             Button {
+                Haptics.medium()
                 captureItems = selectedAthleteIDs.compactMap { id in
                     guard let a = engine.athletes.first(where: { $0.id == id }) else { return nil }
                     return CaptureItem(id: a.id, name: a.name)
@@ -1745,6 +1993,7 @@ struct CaptureFlowView: View {
             // Consent toggle
             HStack(spacing: 12) {
                 Toggle("", isOn: $consentGiven).labelsHidden().tint(Color.brand)
+                    .onChange(of: consentGiven) { _, _ in Haptics.light() }
                 VStack(alignment: .leading, spacing: 2) {
                     Text("Consent Confirmed").font(.subheadline.bold()).foregroundStyle(.white)
                     Text("All athletes have provided consent for video analysis.")
@@ -1762,6 +2011,7 @@ struct CaptureFlowView: View {
                         .background(Color.bgCardLight).foregroundStyle(.white).cornerRadius(14)
                 }
                 Button {
+                    Haptics.medium()
                     withAnimation(.spring(response: 0.4, dampingFraction: 0.75)) { step = 3 }
                     startAnalysis()
                 } label: {
@@ -1855,8 +2105,13 @@ struct CaptureFlowView: View {
             }
 
             Button {
+                Haptics.medium()
+                // Save session notes
+                if !sessionNotes.isEmpty {
+                    engine.saveNote(sessionNotes, date: selectedDate, isFresh: isFresh)
+                }
                 withAnimation(.spring(response: 0.4, dampingFraction: 0.75)) { step = 1 }
-                captureItems = []; selectedAthleteIDs = []; consentGiven = false
+                captureItems = []; selectedAthleteIDs = []; consentGiven = false; sessionNotes = ""
             } label: {
                 Text("Done").font(.headline)
                     .frame(maxWidth: .infinity).padding(15)
@@ -1897,6 +2152,10 @@ struct CaptureFlowView: View {
                             engine.scheduleAtRiskNotification(name: r.name, degradation: Int(r.fatigueDegradationPct))
                         }
                     }
+                }
+                // Haptic when all items complete
+                if captureItems.allSatisfy(\.done) {
+                    Haptics.success()
                 }
             }
         }
@@ -1959,7 +2218,7 @@ struct RosterView: View {
                                 let r = engine.readiness(for: a)
                                 NavigationLink(value: a.id) {
                                     HStack(spacing: 12) {
-                                        JerseyCircle(number: a.jersey, size: 42, glowing: r.status == .atRisk)
+                                        AthleteAvatarView(athlete: a, size: 42, glowing: r.status == .atRisk)
                                         VStack(alignment: .leading, spacing: 2) {
                                             Text(a.name).font(.subheadline.bold()).foregroundStyle(.white).lineLimit(1)
                                             Text(a.position).font(.caption).foregroundStyle(Color.textSecondary)
@@ -2010,18 +2269,71 @@ struct RosterView: View {
     }
 }
 
+// MARK: - Athlete Avatar (Photo or Jersey)
+struct AthleteAvatarView: View {
+    let athlete: Athlete
+    let size: CGFloat
+    var glowing: Bool = false
+
+    var body: some View {
+        if let photoData = athlete.photoData, let uiImage = UIImage(data: photoData) {
+            ZStack {
+                Image(uiImage: uiImage)
+                    .resizable().scaledToFill()
+                    .frame(width: size, height: size)
+                    .clipShape(Circle())
+                if glowing {
+                    Circle()
+                        .stroke(Color.statusRed.opacity(0.6), lineWidth: 2)
+                        .frame(width: size, height: size)
+                        .shadow(color: Color.statusRed.opacity(0.5), radius: 6)
+                }
+            }
+        } else {
+            JerseyCircle(number: athlete.jersey, size: size, glowing: glowing)
+        }
+    }
+}
+
 struct AddAthleteSheet: View {
     @Binding var newName: String
     @Binding var newJersey: String
     @Binding var newPosition: String
     let onAdd: () -> Void
     let onCancel: () -> Void
+    @State private var selectedPhoto: PhotosPickerItem? = nil
+    @State private var photoData: Data? = nil
 
     var body: some View {
         NavigationStack {
             ZStack {
                 Color.bgPrimary.ignoresSafeArea()
                 VStack(spacing: 20) {
+                    // Photo Picker
+                    PhotosPicker(selection: $selectedPhoto, matching: .images) {
+                        if let photoData, let uiImage = UIImage(data: photoData) {
+                            Image(uiImage: uiImage)
+                                .resizable().scaledToFill()
+                                .frame(width: 80, height: 80)
+                                .clipShape(Circle())
+                                .overlay(Circle().stroke(Color.brand, lineWidth: 2))
+                        } else {
+                            ZStack {
+                                Circle().fill(Color.bgCard).frame(width: 80, height: 80)
+                                Image(systemName: "camera.fill")
+                                    .font(.title2).foregroundStyle(Color.textSecondary)
+                            }
+                            .overlay(Circle().stroke(Color.bgCardLight, lineWidth: 1))
+                        }
+                    }
+                    .onChange(of: selectedPhoto) { _, item in
+                        Task {
+                            if let data = try? await item?.loadTransferable(type: Data.self) {
+                                photoData = data
+                            }
+                        }
+                    }
+
                     FloatingTextField(label: "Name", placeholder: "e.g. Alex Morgan", text: $newName)
                     FloatingTextField(label: "Jersey #", placeholder: "e.g. 13", text: $newJersey)
                     FloatingTextField(label: "Position", placeholder: "e.g. Forward", text: $newPosition)
@@ -2093,6 +2405,12 @@ struct HistoryView: View {
                                                 .font(.subheadline.bold()).foregroundStyle(.white)
                                             Text("\(session.count) athlete\(session.count > 1 ? "s" : "")")
                                                 .font(.caption).foregroundStyle(Color.textSecondary)
+                                            let note = engine.getNote(date: session.date, isFresh: session.isFresh)
+                                            if !note.isEmpty {
+                                                Text(note)
+                                                    .font(.caption2).foregroundStyle(Color.brand.opacity(0.8))
+                                                    .lineLimit(1)
+                                            }
                                         }
                                         Spacer()
                                         Text(session.isFresh ? "Fresh" : "Fatigued")
@@ -2157,6 +2475,16 @@ struct SessionDetailSheet: View {
                         }
                         Text(date, format: .dateTime.weekday(.wide).month(.wide).day().year())
                             .font(.subheadline).foregroundStyle(Color.textSecondary)
+
+                        // Session notes
+                        let note = engine.getNote(date: date, isFresh: isFresh)
+                        if !note.isEmpty {
+                            HStack(spacing: 8) {
+                                Image(systemName: "note.text").foregroundStyle(Color.brand)
+                                Text(note).font(.subheadline).foregroundStyle(.white)
+                            }
+                            .padding(12).background(Color.bgCard).cornerRadius(10)
+                        }
 
                         Divider().background(Color.bgCardLight)
 
@@ -2263,7 +2591,7 @@ struct SettingsView: View {
                         // About
                         SettingsSection(title: "ABOUT") {
                             SettingsRow(icon: "info.circle", label: "Version") {
-                                Text("3.0.0").foregroundStyle(Color.textSecondary)
+                                Text("3.1.0").foregroundStyle(Color.textSecondary)
                             }
                             SettingsRow(icon: "hammer", label: "Build") {
                                 Text("2025.07").foregroundStyle(Color.textSecondary)
