@@ -1,5 +1,11 @@
 import SwiftUI
 import AuthenticationServices
+import AVFoundation
+import AVKit
+
+// NOTE: Info.plist must include:
+// NSCameraUsageDescription - "LANDER Buddy needs camera access to record landing videos for analysis."
+// NSMicrophoneUsageDescription - "LANDER Buddy needs microphone access to record audio with landing videos."
 
 // MARK: - Color Theme
 extension Color {
@@ -13,15 +19,17 @@ extension Color {
 }
 
 // MARK: - Data Models
-enum AthleteStatus: String { case good = "Good", caution = "Caution", atRisk = "At Risk", buildingBaseline = "Building Baseline" }
-enum AthleteTrend: String { case improving = "Improving", stable = "Stable", worsening = "Worsening" }
+enum AthleteStatus: String, Codable { case good = "Good", caution = "Caution", atRisk = "At Risk", buildingBaseline = "Building Baseline" }
+enum AthleteTrend: String, Codable { case improving = "Improving", stable = "Stable", worsening = "Worsening" }
 
-
-struct DataPoint: Identifiable {
-    let id = UUID()
+struct DataPoint: Identifiable, Codable {
+    let id: UUID
     let date: Date
     let value: Double
     let isFresh: Bool
+    init(id: UUID = UUID(), date: Date, value: Double, isFresh: Bool) {
+        self.id = id; self.date = date; self.value = value; self.isFresh = isFresh
+    }
 }
 
 struct ModelMetrics {
@@ -36,12 +44,14 @@ struct CaptureItem: Identifiable {
     let id: UUID
     var name: String
     var videoAttached: Bool = false
+    var videoURL: URL? = nil
+    var thumbnail: UIImage? = nil
     var processing: Bool = false
     var done: Bool = false
     var resultMetrics: ModelMetrics?
 }
 
-struct Athlete: Identifiable {
+struct Athlete: Identifiable, Codable {
     let id: UUID
     var name: String
     var jersey: Int
@@ -68,6 +78,30 @@ struct AthleteReadiness: Identifiable {
     let allSessions: [DataPoint]
 }
 
+// MARK: - Persistence Helpers
+struct PersistenceManager {
+    private static var documentsURL: URL {
+        FileManager.default.urls(for: .documentDirectory, in: .userDomainMask)[0]
+    }
+    private static var dataFileURL: URL {
+        documentsURL.appendingPathComponent("buddy_athletes.json")
+    }
+    static func saveAthletes(_ athletes: [Athlete]) {
+        do {
+            let data = try JSONEncoder().encode(athletes)
+            try data.write(to: dataFileURL, options: .atomic)
+        } catch { print("Save failed: \(error)") }
+    }
+    static func loadAthletes() -> [Athlete]? {
+        guard FileManager.default.fileExists(atPath: dataFileURL.path) else { return nil }
+        do {
+            let data = try Data(contentsOf: dataFileURL)
+            return try JSONDecoder().decode([Athlete].self, from: data)
+        } catch { print("Load failed: \(error)"); return nil }
+    }
+}
+
+
 // MARK: - Data Engine
 @Observable
 class DataEngine {
@@ -78,35 +112,49 @@ class DataEngine {
     var cautionThreshold: Double = 10.0
     var atRiskThreshold: Double = 18.0
 
-    init() { loadDemoData() }
+    @ObservationIgnored
+    @AppStorage("hasCompletedOnboarding") var hasCompletedOnboarding = false
+    @ObservationIgnored
+    @AppStorage("teamName") var storedTeamName = ""
+    @ObservationIgnored
+    @AppStorage("coachName") var storedCoachName = ""
+    @ObservationIgnored
+    @AppStorage("sportType") var storedSportType = ""
 
+    init() {
+        if let saved = PersistenceManager.loadAthletes(), !saved.isEmpty {
+            athletes = saved
+        } else {
+            loadDemoData()
+        }
+        if !storedTeamName.isEmpty { teamName = storedTeamName }
+        if !storedCoachName.isEmpty { userName = storedCoachName }
+    }
+
+    func save() { PersistenceManager.saveAthletes(athletes) }
 
     func loadDemoData() {
         let cal = Calendar.current
         let now = Date()
         func weeksAgo(_ w: Int, day: Int) -> Date { cal.date(byAdding: .day, value: -(w * 7) + day, to: now)! }
 
-        // Maya #7 Forward: Good + Stable (~5%)
         var maya: [DataPoint] = []
         for w in (0..<6).reversed() {
             maya.append(DataPoint(date: weeksAgo(w, day: 0), value: 6.0 + Double.random(in: -0.2...0.2), isFresh: true))
             maya.append(DataPoint(date: weeksAgo(w, day: 2), value: 6.3 + Double.random(in: -0.15...0.2), isFresh: false))
         }
-        // Carlos #12 Midfielder: Good + Improving (12% → 6%)
         var carlos: [DataPoint] = []
         for w in (0..<6).reversed() {
             let p = Double(5 - w) / 5.0
             carlos.append(DataPoint(date: weeksAgo(w, day: 0), value: 7.0 + Double.random(in: -0.15...0.15), isFresh: true))
             carlos.append(DataPoint(date: weeksAgo(w, day: 2), value: 7.0 + (0.84 - p * 0.42) + Double.random(in: -0.1...0.1), isFresh: false))
         }
-        // Aisha #3 Defender: Caution + Worsening (8% → 14%)
         var aisha: [DataPoint] = []
         for w in (0..<6).reversed() {
             let p = Double(5 - w) / 5.0
             aisha.append(DataPoint(date: weeksAgo(w, day: 0), value: 7.5 + Double.random(in: -0.15...0.15), isFresh: true))
             aisha.append(DataPoint(date: weeksAgo(w, day: 2), value: 7.5 + (0.6 + p * 0.45) + Double.random(in: -0.08...0.1), isFresh: false))
         }
-        // Jake #21 Goalkeeper: At Risk + Worsening (12% → 24%)
         var jake: [DataPoint] = []
         for w in (0..<6).reversed() {
             let p = Double(5 - w) / 5.0
@@ -119,6 +167,7 @@ class DataEngine {
             Athlete(id: UUID(), name: "Aisha Patel", jersey: 3, position: "Defender", sessions: aisha),
             Athlete(id: UUID(), name: "Jake Thompson", jersey: 21, position: "Goalkeeper", sessions: jake)
         ]
+        save()
     }
 
 
@@ -166,7 +215,6 @@ class DataEngine {
             sessionCount: athlete.sessions.count, allSessions: athlete.sessions)
     }
 
-
     var allReadiness: [AthleteReadiness] { athletes.map { readiness(for: $0) }.sorted { $0.fatigueDegradationPct > $1.fatigueDegradationPct } }
 
     var teamScore: Int {
@@ -198,9 +246,10 @@ class DataEngine {
 
     func addAthlete(name: String, jersey: Int, position: String) {
         athletes.append(Athlete(id: UUID(), name: name, jersey: jersey, position: position, sessions: []))
+        save()
     }
-    func removeAthlete(_ id: UUID) { athletes.removeAll { $0.id == id } }
-    func resetDemo() { athletes.removeAll(); loadDemoData() }
+    func removeAthlete(_ id: UUID) { athletes.removeAll { $0.id == id }; save() }
+    func resetDemo() { athletes.removeAll(); loadDemoData(); save() }
 }
 
 
@@ -211,8 +260,15 @@ struct BuddyAppApp: App {
     var body: some Scene {
         WindowGroup {
             Group {
-                if engine.isSignedIn { MainTabView() }
-                else { OnboardingView() }
+                if engine.isSignedIn {
+                    if engine.hasCompletedOnboarding {
+                        MainTabView()
+                    } else {
+                        TeamSetupView()
+                    }
+                } else {
+                    OnboardingView()
+                }
             }
             .environment(engine)
             .preferredColorScheme(.dark)
@@ -244,8 +300,70 @@ struct OnboardingView: View {
                         .frame(maxWidth: .infinity).frame(height: 50)
                         .background(Color.cardBg).cornerRadius(12).foregroundStyle(.white)
                 }.padding(.horizontal, 40)
-                Button("Skip — use demo data") { engine.isSignedIn = true }
+                Button("Skip — use demo data") { engine.hasCompletedOnboarding = true; engine.isSignedIn = true }
                     .font(.footnote).foregroundStyle(Color.textSecondary)
+                Spacer().frame(height: 40)
+            }
+        }
+    }
+}
+
+
+// MARK: - Team Setup (Post Sign-In Onboarding)
+struct TeamSetupView: View {
+    @Environment(DataEngine.self) private var engine
+    @State private var teamNameInput = ""
+    @State private var coachNameInput = ""
+    @State private var sportType = "Soccer"
+    private let sportOptions = ["Soccer", "Basketball", "Volleyball", "Track & Field", "Football", "Other"]
+
+    var body: some View {
+        ZStack {
+            Color.bgPrimary.ignoresSafeArea()
+            VStack(spacing: 24) {
+                Spacer()
+                Image(systemName: "person.3.fill")
+                    .font(.system(size: 48)).foregroundStyle(Color.brand)
+                Text("Set Up Your Team").font(.title2.bold()).foregroundStyle(.white)
+                Text("Tell us about your team to get started")
+                    .font(.subheadline).foregroundStyle(Color.textSecondary)
+
+                VStack(spacing: 16) {
+                    VStack(alignment: .leading, spacing: 6) {
+                        Text("Team Name").font(.caption).foregroundStyle(Color.textSecondary)
+                        TextField("e.g. FC Thunder", text: $teamNameInput)
+                            .padding(12).background(Color.cardBg).cornerRadius(10)
+                            .foregroundStyle(.white)
+                    }
+                    VStack(alignment: .leading, spacing: 6) {
+                        Text("Sport").font(.caption).foregroundStyle(Color.textSecondary)
+                        Picker("Sport", selection: $sportType) {
+                            ForEach(sportOptions, id: \.self) { Text($0) }
+                        }.pickerStyle(.menu).tint(Color.brand)
+                            .padding(8).frame(maxWidth: .infinity, alignment: .leading)
+                            .background(Color.cardBg).cornerRadius(10)
+                    }
+                    VStack(alignment: .leading, spacing: 6) {
+                        Text("Coach Name").font(.caption).foregroundStyle(Color.textSecondary)
+                        TextField("e.g. Coach Davis", text: $coachNameInput)
+                            .padding(12).background(Color.cardBg).cornerRadius(10)
+                            .foregroundStyle(.white)
+                    }
+                }.padding(.horizontal, 32)
+
+                Spacer()
+                Button {
+                    engine.storedTeamName = teamNameInput.isEmpty ? "My Team" : teamNameInput
+                    engine.storedCoachName = coachNameInput.isEmpty ? "Coach" : coachNameInput
+                    engine.storedSportType = sportType
+                    engine.teamName = engine.storedTeamName
+                    engine.userName = engine.storedCoachName
+                    engine.hasCompletedOnboarding = true
+                } label: {
+                    Text("Get Started").frame(maxWidth: .infinity).padding()
+                        .background(Color.brand).foregroundStyle(.black)
+                        .cornerRadius(12).bold()
+                }.padding(.horizontal, 32)
                 Spacer().frame(height: 40)
             }
         }
@@ -266,7 +384,7 @@ struct MainTabView: View {
     }
 }
 
-// MARK: - Sparkline
+// MARK: - Sparkline (Inverted Y-axis: lower values = top, higher = bottom)
 struct SparklineView: View {
     let points: [Double]
     let color: Color
@@ -278,7 +396,8 @@ struct SparklineView: View {
                 Path { path in
                     for (i, val) in points.enumerated() {
                         let x = geo.size.width * CGFloat(i) / CGFloat(points.count - 1)
-                        let y = geo.size.height * (1 - CGFloat((val - mn) / range))
+                        // Inverted: higher values go DOWN (bad), lower values go UP (good)
+                        let y = geo.size.height * CGFloat((val - mn) / range)
                         if i == 0 { path.move(to: CGPoint(x: x, y: y)) }
                         else { path.addLine(to: CGPoint(x: x, y: y)) }
                     }
@@ -289,57 +408,106 @@ struct SparklineView: View {
 }
 
 
-// MARK: - Line Chart
+// MARK: - Line Chart (with axis labels, fresh/fatigued markers, baseline legend)
 struct LineChartView: View {
     let data: [DataPoint]
     let baselineValue: Double?
     let lineColor: Color
     let title: String
     let unit: String
+    var showFreshFatigued: Bool = false
 
     var body: some View {
         VStack(alignment: .leading, spacing: 4) {
             Text(title).font(.caption).foregroundStyle(Color.textSecondary)
-            GeometryReader { geo in
+            HStack(spacing: 0) {
+                // Y-axis labels
                 let values = data.map(\.value)
                 let allVals = baselineValue != nil ? values + [baselineValue!] : values
                 let mn = allVals.min() ?? 0; let mx = allVals.max() ?? 1
-                let range = mx - mn == 0 ? 1 : mx - mn
-                let h = geo.size.height; let w = geo.size.width
+                VStack {
+                    Text(String(format: "%.1f", mx)).font(.system(size: 8)).foregroundStyle(Color.textSecondary)
+                    Spacer()
+                    Text(String(format: "%.1f", mn)).font(.system(size: 8)).foregroundStyle(Color.textSecondary)
+                }.frame(width: 28, height: 120)
 
-                ZStack {
-                    // Fill gradient
-                    Path { path in
-                        for (i, val) in values.enumerated() {
-                            let x = w * CGFloat(i) / CGFloat(max(values.count - 1, 1))
-                            let y = h * (1 - CGFloat((val - mn) / range))
-                            if i == 0 { path.move(to: CGPoint(x: x, y: y)) }
-                            else { path.addLine(to: CGPoint(x: x, y: y)) }
+                // Chart area
+                GeometryReader { geo in
+                    let range = mx - mn == 0 ? 1 : mx - mn
+                    let h = geo.size.height; let w = geo.size.width
+
+                    ZStack {
+                        // Fill gradient
+                        Path { path in
+                            for (i, val) in values.enumerated() {
+                                let x = w * CGFloat(i) / CGFloat(max(values.count - 1, 1))
+                                let y = h * (1 - CGFloat((val - mn) / range))
+                                if i == 0 { path.move(to: CGPoint(x: x, y: y)) }
+                                else { path.addLine(to: CGPoint(x: x, y: y)) }
+                            }
+                            path.addLine(to: CGPoint(x: w, y: h))
+                            path.addLine(to: CGPoint(x: 0, y: h))
+                            path.closeSubpath()
+                        }.fill(LinearGradient(colors: [lineColor.opacity(0.3), lineColor.opacity(0.0)], startPoint: .top, endPoint: .bottom))
+
+                        // Line
+                        Path { path in
+                            for (i, val) in values.enumerated() {
+                                let x = w * CGFloat(i) / CGFloat(max(values.count - 1, 1))
+                                let y = h * (1 - CGFloat((val - mn) / range))
+                                if i == 0 { path.move(to: CGPoint(x: x, y: y)) }
+                                else { path.addLine(to: CGPoint(x: x, y: y)) }
+                            }
+                        }.stroke(lineColor, lineWidth: 2.5)
+
+                        // Fresh/Fatigued dot markers
+                        if showFreshFatigued {
+                            ForEach(Array(data.enumerated()), id: \.offset) { i, dp in
+                                let x = w * CGFloat(i) / CGFloat(max(data.count - 1, 1))
+                                let y = h * (1 - CGFloat((dp.value - mn) / range))
+                                Circle()
+                                    .fill(dp.isFresh ? Color.statusGreen : Color.statusYellow)
+                                    .frame(width: dp.isFresh ? 5 : 7, height: dp.isFresh ? 5 : 7)
+                                    .overlay(dp.isFresh ? Circle().stroke(Color.statusGreen, lineWidth: 1.5).frame(width: 7, height: 7) : nil)
+                                    .position(x: x, y: y)
+                            }
                         }
-                        path.addLine(to: CGPoint(x: w, y: h))
-                        path.addLine(to: CGPoint(x: 0, y: h))
-                        path.closeSubpath()
-                    }.fill(LinearGradient(colors: [lineColor.opacity(0.3), lineColor.opacity(0.0)], startPoint: .top, endPoint: .bottom))
 
-                    // Line
-                    Path { path in
-                        for (i, val) in values.enumerated() {
-                            let x = w * CGFloat(i) / CGFloat(max(values.count - 1, 1))
-                            let y = h * (1 - CGFloat((val - mn) / range))
-                            if i == 0 { path.move(to: CGPoint(x: x, y: y)) }
-                            else { path.addLine(to: CGPoint(x: x, y: y)) }
+                        // Baseline dashed
+                        if let bl = baselineValue {
+                            let by = h * (1 - CGFloat((bl - mn) / range))
+                            Path { path in path.move(to: CGPoint(x: 0, y: by)); path.addLine(to: CGPoint(x: w, y: by)) }
+                                .stroke(Color.textSecondary, style: StrokeStyle(lineWidth: 1, dash: [5, 4]))
                         }
-                    }.stroke(lineColor, lineWidth: 2.5)
-
-                    // Baseline dashed
-                    if let bl = baselineValue {
-                        let by = h * (1 - CGFloat((bl - mn) / range))
-                        Path { path in path.move(to: CGPoint(x: 0, y: by)); path.addLine(to: CGPoint(x: w, y: by)) }
-                            .stroke(Color.textSecondary, style: StrokeStyle(lineWidth: 1, dash: [5, 4]))
                     }
+                }.frame(height: 120)
+            }
+            // X-axis date labels
+            if let first = data.first, let last = data.last {
+                HStack {
+                    Spacer().frame(width: 28)
+                    Text(first.date, format: .dateTime.month(.abbreviated).day()).font(.system(size: 8)).foregroundStyle(Color.textSecondary)
+                    Spacer()
+                    Text(last.date, format: .dateTime.month(.abbreviated).day()).font(.system(size: 8)).foregroundStyle(Color.textSecondary)
                 }
-            }.frame(height: 120)
-            HStack { Text(unit).font(.caption2).foregroundStyle(Color.textSecondary); Spacer() }
+            }
+            // Baseline legend
+            if baselineValue != nil {
+                HStack(spacing: 4) {
+                    Path { path in path.move(to: .zero); path.addLine(to: CGPoint(x: 16, y: 0)) }
+                        .stroke(Color.textSecondary, style: StrokeStyle(lineWidth: 1, dash: [3, 2]))
+                        .frame(width: 16, height: 1)
+                    Text("Baseline").font(.system(size: 9)).foregroundStyle(Color.textSecondary)
+                    if showFreshFatigued {
+                        Spacer().frame(width: 8)
+                        Circle().fill(Color.statusGreen).frame(width: 5, height: 5)
+                        Text("Fresh").font(.system(size: 9)).foregroundStyle(Color.textSecondary)
+                        Circle().fill(Color.statusYellow).frame(width: 6, height: 6)
+                        Text("Fatigued").font(.system(size: 9)).foregroundStyle(Color.textSecondary)
+                    }
+                }.padding(.leading, 28)
+            }
+            HStack { Spacer().frame(width: 28); Text(unit).font(.caption2).foregroundStyle(Color.textSecondary); Spacer() }
         }
         .padding().background(Color.cardBg).cornerRadius(12)
     }
@@ -384,7 +552,8 @@ struct TrendBadge: View {
     var body: some View {
         HStack(spacing: 3) {
             Image(systemName: icon).font(.caption2)
-            Text(trend.rawValue).font(.caption2.bold())
+            Text(trend.rawValue).font(.system(size: 10).bold())
+                .lineLimit(1).minimumScaleFactor(0.8)
         }.foregroundStyle(color)
     }
 }
@@ -412,7 +581,7 @@ struct DashboardView: View {
                         MetricCard(title: "Team Score", value: "\(engine.teamScore)", subtitle: "/ 100", color: .brand)
                         MetricCard(title: "This Week", value: "\(engine.weekSessionCount)", subtitle: "sessions", color: Color.statusGreen)
                         if let mover = engine.biggestMover {
-                            MetricCard(title: "Biggest Mover", value: "\(Int(mover.fatigueDegradationPct))%", subtitle: mover.name.components(separatedBy: " ").first ?? "", color: Color.statusRed)
+                            MetricCard(title: "Biggest Mover", value: "\(Int(mover.fatigueDegradationPct))%", subtitle: mover.name, color: Color.statusRed)
                         }
                     }.padding(.horizontal)
 
@@ -427,10 +596,14 @@ struct DashboardView: View {
                         }.padding(12).background(Color.statusRed.opacity(0.15)).cornerRadius(10).padding(.horizontal)
                     }
 
-                    // Team trend chart
+                    // Team trend chart with "6 wks" label
                     if engine.teamDeltaTrend.count > 1 {
                         VStack(alignment: .leading, spacing: 4) {
-                            Text("Team Avg Fatigue Delta").font(.caption).foregroundStyle(Color.textSecondary)
+                            HStack {
+                                Text("Team Avg Fatigue Delta").font(.caption).foregroundStyle(Color.textSecondary)
+                                Spacer()
+                                Text("6 wks").font(.system(size: 9)).foregroundStyle(Color.textSecondary)
+                            }
                             SparklineView(points: engine.teamDeltaTrend.map(\.value), color: .brand)
                                 .frame(height: 50)
                         }.padding().background(Color.cardBg).cornerRadius(12).padding(.horizontal)
@@ -454,14 +627,14 @@ struct DashboardView: View {
     }
 }
 
-
 struct MetricCard: View {
     let title: String; let value: String; let subtitle: String; let color: Color
     var body: some View {
         VStack(spacing: 4) {
-            Text(title).font(.caption2).foregroundStyle(Color.textSecondary)
+            Text(title).font(.caption2).foregroundStyle(Color.textSecondary).lineLimit(1)
             Text(value).font(.title2.bold()).foregroundStyle(color)
             Text(subtitle).font(.caption2).foregroundStyle(Color.textSecondary)
+                .lineLimit(1).minimumScaleFactor(0.7)
         }
         .frame(maxWidth: .infinity).padding(12)
         .background(Color.cardBg).cornerRadius(12)
@@ -478,7 +651,7 @@ struct AthleteRow: View {
                 Text(readiness.position).font(.caption).foregroundStyle(Color.textSecondary)
             }
             Spacer()
-            // Sparkline
+            // Sparkline (inverted y: upward = bad)
             SparklineView(points: readiness.deltaHistory.suffix(5).map(\.value),
                 color: readiness.trend == .worsening ? Color.statusRed : readiness.trend == .improving ? Color.statusGreen : Color.textSecondary)
                 .frame(width: 40, height: 20)
@@ -517,8 +690,8 @@ struct AthleteDetailView: View {
                         Text(r.recommendation).font(.callout).foregroundStyle(.white)
                     }.padding().background(Color.cardBg).cornerRadius(12).padding(.horizontal)
 
-                    // Charts
-                    LineChartView(data: r.valgusHistory, baselineValue: r.baselineValgus, lineColor: .brand, title: "Knee Valgus", unit: "degrees")
+                    // Valgus chart with fresh/fatigued markers
+                    LineChartView(data: r.valgusHistory, baselineValue: r.baselineValgus, lineColor: .brand, title: "Knee Valgus", unit: "degrees", showFreshFatigued: true)
                         .padding(.horizontal)
                     LineChartView(data: r.flexionHistory, baselineValue: 55.0, lineColor: Color.statusGreen, title: "Knee Flexion", unit: "degrees")
                         .padding(.horizontal)
@@ -570,6 +743,48 @@ struct StatCell: View {
 }
 
 
+// MARK: - Camera Integration (AVFoundation)
+struct CameraView: UIViewControllerRepresentable {
+    let sourceType: UIImagePickerController.SourceType
+    let onComplete: (URL?) -> Void
+
+    func makeUIViewController(context: Context) -> UIImagePickerController {
+        let picker = UIImagePickerController()
+        picker.sourceType = sourceType
+        picker.mediaTypes = ["public.movie"]
+        picker.videoQuality = .typeMedium
+        picker.delegate = context.coordinator
+        return picker
+    }
+    func updateUIViewController(_ uiViewController: UIImagePickerController, context: Context) {}
+
+    func makeCoordinator() -> Coordinator { Coordinator(onComplete: onComplete) }
+
+    class Coordinator: NSObject, UIImagePickerControllerDelegate, UINavigationControllerDelegate {
+        let onComplete: (URL?) -> Void
+        init(onComplete: @escaping (URL?) -> Void) { self.onComplete = onComplete }
+
+        func imagePickerController(_ picker: UIImagePickerController, didFinishPickingMediaWithInfo info: [UIImagePickerController.InfoKey: Any]) {
+            let url = info[.mediaURL] as? URL
+            picker.dismiss(animated: true) { self.onComplete(url) }
+        }
+        func imagePickerControllerDidCancel(_ picker: UIImagePickerController) {
+            picker.dismiss(animated: true) { self.onComplete(nil) }
+        }
+    }
+}
+
+func generateThumbnail(from url: URL) -> UIImage? {
+    let asset = AVAsset(url: url)
+    let generator = AVAssetImageGenerator(asset: asset)
+    generator.appliesPreferredTrackTransform = true
+    do {
+        let cgImage = try generator.copyCGImage(at: .zero, actualTime: nil)
+        return UIImage(cgImage: cgImage)
+    } catch { return nil }
+}
+
+
 // MARK: - Capture Flow
 struct CaptureFlowView: View {
     @Environment(DataEngine.self) private var engine
@@ -580,7 +795,11 @@ struct CaptureFlowView: View {
     @State private var captureItems: [CaptureItem] = []
     @State private var consentGiven = false
     @State private var analyzing = false
-    @State private var showCamera = false
+    @State private var showCameraFor: UUID? = nil
+    @State private var cameraSourceType: UIImagePickerController.SourceType = .camera
+    @State private var showVideoActionSheet = false
+    @State private var actionSheetItemID: UUID? = nil
+    @State private var cameraPermissionDenied = false
 
     var body: some View {
         NavigationStack {
@@ -605,17 +824,55 @@ struct CaptureFlowView: View {
                 }
             }
             .navigationTitle("Capture")
-            .sheet(isPresented: $showCamera) { CameraSimView() }
+            .fullScreenCover(item: $showCameraFor) { itemID in
+                CameraView(sourceType: cameraSourceType) { url in
+                    if let url = url, let idx = captureItems.firstIndex(where: { $0.id == itemID }) {
+                        captureItems[idx].videoURL = url
+                        captureItems[idx].videoAttached = true
+                        captureItems[idx].thumbnail = generateThumbnail(from: url)
+                    }
+                    showCameraFor = nil
+                }.ignoresSafeArea()
+            }
+            .alert("Camera Access Denied", isPresented: $cameraPermissionDenied) {
+                Button("Open Settings") {
+                    if let url = URL(string: UIApplication.openSettingsURLString) {
+                        UIApplication.shared.open(url)
+                    }
+                }
+                Button("Cancel", role: .cancel) {}
+            } message: {
+                Text("Please enable camera access in Settings to record landing videos.")
+            }
         }
     }
+
+    private func checkCameraAndRecord(for id: UUID) {
+        let status = AVCaptureDevice.authorizationStatus(for: .video)
+        switch status {
+        case .authorized:
+            cameraSourceType = .camera
+            showCameraFor = id
+        case .notDetermined:
+            AVCaptureDevice.requestAccess(for: .video) { granted in
+                DispatchQueue.main.async {
+                    if granted { cameraSourceType = .camera; showCameraFor = id }
+                    else { cameraPermissionDenied = true }
+                }
+            }
+        default:
+            cameraPermissionDenied = true
+        }
+    }
+
 
     private var captureStep1: some View {
         VStack(alignment: .leading, spacing: 16) {
             Text("Session Details").font(.title3.bold()).foregroundStyle(.white)
             DatePicker("Date", selection: $selectedDate, displayedComponents: .date).tint(.brand)
             Picker("Type", selection: $isFresh) {
-                Text("Fresh (Monday)").tag(true)
-                Text("Fatigued (Wednesday)").tag(false)
+                Text("Fresh").tag(true)
+                Text("Fatigued").tag(false)
             }.pickerStyle(.segmented).tint(.brand)
 
             Text("Select Athletes").font(.headline).foregroundStyle(.white).padding(.top)
@@ -626,10 +883,12 @@ struct CaptureFlowView: View {
                 } label: {
                     HStack {
                         JerseyCircle(number: a.jersey, size: 36)
-                        Text(a.name).foregroundStyle(.white)
+                        Text(a.name).foregroundStyle(.white).lineLimit(1)
                         Spacer()
                         if selectedAthleteIDs.contains(a.id) {
                             Image(systemName: "checkmark.circle.fill").foregroundStyle(Color.brand)
+                        } else {
+                            Image(systemName: "circle").foregroundStyle(Color.textSecondary)
                         }
                     }.padding(10).background(Color.cardBg).cornerRadius(10)
                 }
@@ -658,18 +917,21 @@ struct CaptureFlowView: View {
 
             ForEach($captureItems) { $item in
                 HStack {
-                    Text(item.name).foregroundStyle(.white)
+                    // Thumbnail if available
+                    if let thumb = item.thumbnail {
+                        Image(uiImage: thumb)
+                            .resizable().scaledToFill()
+                            .frame(width: 40, height: 40)
+                            .clipShape(RoundedRectangle(cornerRadius: 6))
+                    }
+                    Text(item.name).foregroundStyle(.white).lineLimit(1)
                     Spacer()
                     if item.videoAttached {
                         Image(systemName: "checkmark.circle.fill").foregroundStyle(Color.statusGreen).font(.title3)
                     } else {
-                        Menu {
-                            Button { showCamera = true; item.videoAttached = true } label: {
-                                Label("Record with Camera", systemImage: "camera.fill")
-                            }
-                            Button { item.videoAttached = true } label: {
-                                Label("Upload from Library", systemImage: "photo.on.rectangle")
-                            }
+                        Button {
+                            actionSheetItemID = item.id
+                            showVideoActionSheet = true
                         } label: {
                             HStack(spacing: 4) {
                                 Image(systemName: "video.badge.plus")
@@ -679,6 +941,18 @@ struct CaptureFlowView: View {
                         }
                     }
                 }.padding(12).background(Color.cardBg).cornerRadius(10)
+            }
+            .confirmationDialog("Add Video", isPresented: $showVideoActionSheet, titleVisibility: .visible) {
+                Button("Record with Camera") {
+                    if let id = actionSheetItemID { checkCameraAndRecord(for: id) }
+                }
+                Button("Upload from Library") {
+                    if let id = actionSheetItemID {
+                        cameraSourceType = .photoLibrary
+                        showCameraFor = id
+                    }
+                }
+                Button("Cancel", role: .cancel) {}
             }
 
             // Consent
@@ -775,9 +1049,9 @@ struct CaptureFlowView: View {
                 captureItems[i].resultMetrics = ModelMetrics(
                     valgusAngle: valgus, kneeFlexionAngle: Double.random(in: 48...62),
                     trunkLean: Double.random(in: 3...12), asymmetry: Double.random(in: 2...15), lessScore: Int.random(in: 55...95))
-                // Add to athlete data
                 if let idx = engine.athletes.firstIndex(where: { $0.id == captureItems[i].id }) {
                     engine.athletes[idx].sessions.append(DataPoint(date: selectedDate, value: valgus, isFresh: isFresh))
+                    engine.save()
                 }
             }
         }
@@ -785,39 +1059,12 @@ struct CaptureFlowView: View {
 }
 
 
-// MARK: - Camera Simulation
-struct CameraSimView: View {
-    @Environment(\.dismiss) private var dismiss
-    var body: some View {
-        ZStack {
-            Color.black.ignoresSafeArea()
-            VStack(spacing: 20) {
-                Spacer()
-                Image(systemName: "camera.viewfinder").font(.system(size: 80)).foregroundStyle(Color.brand.opacity(0.5))
-                Text("Camera Preview").font(.title3).foregroundStyle(.white)
-                Text("Point at athlete performing drop-jump landing").font(.caption).foregroundStyle(Color.textSecondary)
-                Spacer()
-                HStack(spacing: 40) {
-                    Button { dismiss() } label: {
-                        Image(systemName: "xmark.circle.fill").font(.title).foregroundStyle(.white)
-                    }
-                    Button { dismiss() } label: {
-                        ZStack {
-                            Circle().fill(Color.brand).frame(width: 70, height: 70)
-                            Circle().stroke(.white, lineWidth: 3).frame(width: 76, height: 76)
-                        }
-                    }
-                    Button { dismiss() } label: {
-                        Image(systemName: "photo.on.rectangle").font(.title).foregroundStyle(.white)
-                    }
-                }.padding(.bottom, 40)
-            }
-        }
-    }
+// MARK: - Identifiable UUID extension for fullScreenCover
+extension UUID: @retroactive Identifiable {
+    public var id: UUID { self }
 }
 
-
-// MARK: - Roster
+// MARK: - Roster (with status badges)
 struct RosterView: View {
     @Environment(DataEngine.self) private var engine
     @State private var showingAdd = false
@@ -838,13 +1085,16 @@ struct RosterView: View {
                 } else {
                     List {
                         ForEach(engine.athletes) { a in
+                            let r = engine.readiness(for: a)
                             NavigationLink(value: a.id) {
                                 HStack(spacing: 12) {
                                     JerseyCircle(number: a.jersey, size: 40)
                                     VStack(alignment: .leading) {
-                                        Text(a.name).font(.subheadline.bold()).foregroundStyle(.white)
+                                        Text(a.name).font(.subheadline.bold()).foregroundStyle(.white).lineLimit(1)
                                         Text(a.position).font(.caption).foregroundStyle(Color.textSecondary)
                                     }
+                                    Spacer()
+                                    StatusBadge(status: r.status)
                                 }
                             }.listRowBackground(Color.cardBg)
                         }
@@ -894,7 +1144,6 @@ struct HistoryView: View {
 
     private var groupedSessions: [(date: Date, isFresh: Bool, count: Int)] {
         var result: [(Date, Bool, Int)] = []
-        let _ = Set(engine.athletes.flatMap(\.sessions).map { ($0.date, $0.isFresh) }.map { "\($0.0.timeIntervalSince1970)-\($0.1)" })
         for athlete in engine.athletes {
             for s in athlete.sessions {
                 let key = "\(s.date.timeIntervalSince1970)-\(s.isFresh)"
@@ -957,9 +1206,22 @@ struct SessionSheetID: Identifiable {
 }
 
 
+// MARK: - Session Detail (with color-coded valgus values)
 struct SessionDetailSheet: View {
     @Environment(DataEngine.self) private var engine
     let date: Date; let isFresh: Bool
+
+    private func valgusColor(for athlete: Athlete, value: Double) -> Color {
+        let fresh = athlete.sessions.filter(\.isFresh)
+        guard !fresh.isEmpty else { return .white }
+        let baseline = fresh.map(\.value).reduce(0, +) / Double(fresh.count)
+        guard baseline > 0 else { return .white }
+        let deltaPct = ((value - baseline) / baseline) * 100
+        if deltaPct > engine.atRiskThreshold { return Color.statusRed }
+        else if deltaPct > engine.cautionThreshold { return Color.statusYellow }
+        else { return Color.statusGreen }
+    }
+
     var body: some View {
         NavigationStack {
             ZStack {
@@ -973,9 +1235,10 @@ struct SessionDetailSheet: View {
                             if let s = a.sessions.first(where: { $0.date == date && $0.isFresh == isFresh }) {
                                 HStack {
                                     JerseyCircle(number: a.jersey, size: 32)
-                                    Text(a.name).font(.subheadline).foregroundStyle(.white)
+                                    Text(a.name).font(.subheadline).foregroundStyle(.white).lineLimit(1)
                                     Spacer()
-                                    Text(String(format: "%.1f°", s.value)).font(.subheadline.bold()).foregroundStyle(.white)
+                                    Text(String(format: "%.1f°", s.value)).font(.subheadline.bold())
+                                        .foregroundStyle(isFresh ? .white : valgusColor(for: a, value: s.value))
                                 }.padding(10).background(Color.cardBg).cornerRadius(8)
                             }
                         }
@@ -1003,14 +1266,20 @@ struct SettingsView: View {
                         HStack {
                             Text("Team Name").foregroundStyle(.white)
                             Spacer()
-                            TextField("", text: Binding(get: { engine.teamName }, set: { engine.teamName = $0 }))
+                            TextField("", text: Binding(get: { engine.teamName }, set: { engine.teamName = $0; engine.storedTeamName = $0 }))
                                 .multilineTextAlignment(.trailing).foregroundStyle(Color.brand)
                         }.listRowBackground(Color.cardBg)
                         HStack {
                             Text("Coach").foregroundStyle(.white)
                             Spacer()
-                            TextField("", text: Binding(get: { engine.userName }, set: { engine.userName = $0 }))
+                            TextField("", text: Binding(get: { engine.userName }, set: { engine.userName = $0; engine.storedCoachName = $0 }))
                                 .multilineTextAlignment(.trailing).foregroundStyle(Color.brand)
+                        }.listRowBackground(Color.cardBg)
+                        HStack {
+                            Text("Sport").foregroundStyle(.white)
+                            Spacer()
+                            Text(engine.storedSportType.isEmpty ? "Not set" : engine.storedSportType)
+                                .foregroundStyle(Color.textSecondary)
                         }.listRowBackground(Color.cardBg)
                     }
 
@@ -1032,14 +1301,14 @@ struct SettingsView: View {
                     }
 
                     Section("About") {
-                        HStack { Text("Version").foregroundStyle(.white); Spacer(); Text("2.0.0").foregroundStyle(Color.textSecondary) }.listRowBackground(Color.cardBg)
+                        HStack { Text("Version").foregroundStyle(.white); Spacer(); Text("2.1.0").foregroundStyle(Color.textSecondary) }.listRowBackground(Color.cardBg)
                         HStack { Text("Build").foregroundStyle(.white); Spacer(); Text("2025.07").foregroundStyle(Color.textSecondary) }.listRowBackground(Color.cardBg)
                     }
 
                     Section {
                         Button("Reset Demo Data") { showResetConfirm = true }
                             .foregroundStyle(Color.statusYellow).listRowBackground(Color.cardBg)
-                        Button("Sign Out") { engine.isSignedIn = false }
+                        Button("Sign Out") { engine.isSignedIn = false; engine.hasCompletedOnboarding = false }
                             .foregroundStyle(Color.statusRed).listRowBackground(Color.cardBg)
                     }
                 }
