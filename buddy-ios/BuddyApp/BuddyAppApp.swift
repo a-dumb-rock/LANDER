@@ -2,6 +2,7 @@ import SwiftUI
 import AuthenticationServices
 import AVFoundation
 import AVKit
+import UserNotifications
 
 // NOTE: Info.plist must include:
 // NSCameraUsageDescription - "LANDER Buddy needs camera access to record landing videos for analysis."
@@ -10,8 +11,10 @@ import AVKit
 // MARK: - Color Theme
 extension Color {
     static let brand = Color(red: 0.75, green: 1.0, blue: 0.0)
+    static let brandGlow = Color(red: 0.75, green: 1.0, blue: 0.0).opacity(0.4)
     static let bgPrimary = Color(red: 0.04, green: 0.06, blue: 0.1)
-    static let cardBg = Color(red: 0.08, green: 0.1, blue: 0.15)
+    static let bgCard = Color(red: 0.08, green: 0.1, blue: 0.15)
+    static let bgCardLight = Color(red: 0.12, green: 0.14, blue: 0.2)
     static let statusGreen = Color(red: 0.2, green: 0.9, blue: 0.4)
     static let statusYellow = Color(red: 1.0, green: 0.8, blue: 0.0)
     static let statusRed = Color(red: 1.0, green: 0.3, blue: 0.3)
@@ -19,10 +22,14 @@ extension Color {
 }
 
 // MARK: - Data Models
-enum AthleteStatus: String, Codable { case good = "Good", caution = "Caution", atRisk = "At Risk", buildingBaseline = "Building Baseline" }
-enum AthleteTrend: String, Codable { case improving = "Improving", stable = "Stable", worsening = "Worsening" }
+enum AthleteStatus: String, Codable, Equatable {
+    case good = "Good", caution = "Caution", atRisk = "At Risk", buildingBaseline = "Building Baseline"
+}
+enum AthleteTrend: String, Codable, Equatable {
+    case improving = "Improving", stable = "Stable", worsening = "Worsening"
+}
 
-struct DataPoint: Identifiable, Codable {
+struct DataPoint: Identifiable, Codable, Equatable {
     let id: UUID
     let date: Date
     let value: Double
@@ -51,6 +58,7 @@ struct CaptureItem: Identifiable {
     var resultMetrics: ModelMetrics?
 }
 
+
 struct Athlete: Identifiable, Codable {
     let id: UUID
     var name: String
@@ -59,8 +67,7 @@ struct Athlete: Identifiable, Codable {
     var sessions: [DataPoint]
 }
 
-
-struct AthleteReadiness: Identifiable {
+struct AthleteReadiness: Identifiable, Equatable {
     let id: UUID
     var name: String
     let jersey: Int
@@ -78,13 +85,19 @@ struct AthleteReadiness: Identifiable {
     let allSessions: [DataPoint]
 }
 
-// MARK: - Persistence Helpers
+// MARK: - Camera Sheet Item
+struct CameraSheetItem: Identifiable {
+    let id: UUID
+}
+
+
+// MARK: - Persistence
 struct PersistenceManager {
     private static var documentsURL: URL {
         FileManager.default.urls(for: .documentDirectory, in: .userDomainMask)[0]
     }
     private static var dataFileURL: URL {
-        documentsURL.appendingPathComponent("buddy_athletes.json")
+        documentsURL.appendingPathComponent("buddy_athletes_v3.json")
     }
     static func saveAthletes(_ athletes: [Athlete]) {
         do {
@@ -109,8 +122,10 @@ class DataEngine {
     var athletes: [Athlete] = []
     var teamName = "FC Thunder"
     var userName = "Coach Davis"
+    var sportType = "Soccer"
     var cautionThreshold: Double = 10.0
     var atRiskThreshold: Double = 18.0
+    var showSplash = false
 
     var hasCompletedOnboarding: Bool {
         get { UserDefaults.standard.bool(forKey: "hasCompletedOnboarding") }
@@ -125,8 +140,12 @@ class DataEngine {
         set { UserDefaults.standard.set(newValue, forKey: "coachName") }
     }
     var storedSportType: String {
-        get { UserDefaults.standard.string(forKey: "sportType") ?? "" }
+        get { UserDefaults.standard.string(forKey: "sportType") ?? "Soccer" }
         set { UserDefaults.standard.set(newValue, forKey: "sportType") }
+    }
+    var notificationsEnabled: Bool {
+        get { UserDefaults.standard.bool(forKey: "notificationsEnabled") }
+        set { UserDefaults.standard.set(newValue, forKey: "notificationsEnabled") }
     }
 
     init() {
@@ -137,37 +156,45 @@ class DataEngine {
         }
         if !storedTeamName.isEmpty { teamName = storedTeamName }
         if !storedCoachName.isEmpty { userName = storedCoachName }
+        if !storedSportType.isEmpty { sportType = storedSportType }
     }
 
     func save() { PersistenceManager.saveAthletes(athletes) }
 
+
     func loadDemoData() {
         let cal = Calendar.current
         let now = Date()
-        func weeksAgo(_ w: Int, day: Int) -> Date { cal.date(byAdding: .day, value: -(w * 7) + day, to: now)! }
+        func weeksAgo(_ w: Int, day: Int) -> Date {
+            cal.date(byAdding: .day, value: -(w * 7) + day, to: now)!
+        }
 
+        // Maya = Good + Stable (~5%)
         var maya: [DataPoint] = []
         for w in (0..<6).reversed() {
-            maya.append(DataPoint(date: weeksAgo(w, day: 0), value: 6.0 + Double.random(in: -0.2...0.2), isFresh: true))
-            maya.append(DataPoint(date: weeksAgo(w, day: 2), value: 6.3 + Double.random(in: -0.15...0.2), isFresh: false))
+            maya.append(DataPoint(date: weeksAgo(w, day: 0), value: 6.0 + Double.random(in: -0.15...0.15), isFresh: true))
+            maya.append(DataPoint(date: weeksAgo(w, day: 2), value: 6.3 + Double.random(in: -0.1...0.15), isFresh: false))
         }
+        // Carlos = Good + Improving (12% -> 6%)
         var carlos: [DataPoint] = []
         for w in (0..<6).reversed() {
-            let p = Double(5 - w) / 5.0
-            carlos.append(DataPoint(date: weeksAgo(w, day: 0), value: 7.0 + Double.random(in: -0.15...0.15), isFresh: true))
-            carlos.append(DataPoint(date: weeksAgo(w, day: 2), value: 7.0 + (0.84 - p * 0.42) + Double.random(in: -0.1...0.1), isFresh: false))
+            let progress = Double(5 - w) / 5.0
+            carlos.append(DataPoint(date: weeksAgo(w, day: 0), value: 7.0 + Double.random(in: -0.1...0.1), isFresh: true))
+            carlos.append(DataPoint(date: weeksAgo(w, day: 2), value: 7.0 + (0.84 - progress * 0.42) + Double.random(in: -0.08...0.08), isFresh: false))
         }
+        // Aisha = Caution + Worsening (8% -> 14%)
         var aisha: [DataPoint] = []
         for w in (0..<6).reversed() {
-            let p = Double(5 - w) / 5.0
-            aisha.append(DataPoint(date: weeksAgo(w, day: 0), value: 7.5 + Double.random(in: -0.15...0.15), isFresh: true))
-            aisha.append(DataPoint(date: weeksAgo(w, day: 2), value: 7.5 + (0.6 + p * 0.45) + Double.random(in: -0.08...0.1), isFresh: false))
+            let progress = Double(5 - w) / 5.0
+            aisha.append(DataPoint(date: weeksAgo(w, day: 0), value: 7.5 + Double.random(in: -0.1...0.1), isFresh: true))
+            aisha.append(DataPoint(date: weeksAgo(w, day: 2), value: 7.5 + (0.6 + progress * 0.45) + Double.random(in: -0.06...0.08), isFresh: false))
         }
+        // Jake = At Risk + Worsening (12% -> 24%)
         var jake: [DataPoint] = []
         for w in (0..<6).reversed() {
-            let p = Double(5 - w) / 5.0
-            jake.append(DataPoint(date: weeksAgo(w, day: 0), value: 8.0 + Double.random(in: -0.15...0.15), isFresh: true))
-            jake.append(DataPoint(date: weeksAgo(w, day: 2), value: 8.0 + (0.96 + p * 0.96) + Double.random(in: -0.1...0.15), isFresh: false))
+            let progress = Double(5 - w) / 5.0
+            jake.append(DataPoint(date: weeksAgo(w, day: 0), value: 8.0 + Double.random(in: -0.1...0.1), isFresh: true))
+            jake.append(DataPoint(date: weeksAgo(w, day: 2), value: 8.0 + (0.96 + progress * 0.96) + Double.random(in: -0.08...0.12), isFresh: false))
         }
         athletes = [
             Athlete(id: UUID(), name: "Maya Johnson", jersey: 7, position: "Forward", sessions: maya),
@@ -198,32 +225,40 @@ class DataEngine {
 
         let trend: AthleteTrend
         if deltaHistory.count >= 3 {
-            let r = Array(deltaHistory.suffix(3))
-            let diff = r.last!.value - r.first!.value
+            let recent = Array(deltaHistory.suffix(3))
+            let diff = recent.last!.value - recent.first!.value
             if diff > 2 { trend = .worsening } else if diff < -2 { trend = .improving } else { trend = .stable }
         } else { trend = .stable }
 
         let recommendation: String
         switch (status, trend) {
-        case (.atRisk, .worsening): recommendation = "Reduce load; landing degraded \(Int(degradation))% under fatigue, worsening 4 weeks. Consider rest day."
-        case (.atRisk, _): recommendation = "High degradation at \(Int(degradation))%. Reduce jumping/cutting load."
-        case (.caution, .worsening): recommendation = "Monitor — degradation trending up to \(Int(degradation))%. Ease plyometric volume."
-        case (.caution, _): recommendation = "Moderate degradation at \(Int(degradation))%. Maintain load, monitor weekly."
-        case (.good, .worsening): recommendation = "Currently good but trend worsening. Watch next 2 sessions."
-        case (.good, .improving): recommendation = "Excellent — degradation reduced. Maintain current program."
-        default: recommendation = "On track — maintain normal load."
+        case (.atRisk, .worsening): recommendation = "Reduce load immediately — landing degraded \(Int(degradation))% under fatigue, worsening over 4 weeks. Consider rest day before next session."
+        case (.atRisk, _): recommendation = "High degradation at \(Int(degradation))%. Reduce jumping and cutting volume this week."
+        case (.caution, .worsening): recommendation = "Monitor closely — degradation trending up to \(Int(degradation))%. Ease plyometric volume."
+        case (.caution, _): recommendation = "Moderate degradation at \(Int(degradation))%. Maintain current load and monitor weekly."
+        case (.good, .worsening): recommendation = "Currently good but trend worsening. Watch next 2 sessions closely."
+        case (.good, .improving): recommendation = "Excellent — degradation reduced. Maintain current training program."
+        default: recommendation = "On track — maintain normal training load."
         }
 
-        let flexionHistory = athlete.sessions.map { DataPoint(date: $0.date, value: 55 + Double.random(in: -4...4), isFresh: $0.isFresh) }
+        let flexionHistory = athlete.sessions.map {
+            DataPoint(date: $0.date, value: 55 + Double.random(in: -3...3), isFresh: $0.isFresh)
+        }
 
-        return AthleteReadiness(id: athlete.id, name: athlete.name, jersey: athlete.jersey, position: athlete.position,
-            fatigueDegradationPct: max(0, degradation), status: status, trend: trend, recommendation: recommendation,
-            valgusHistory: athlete.sessions, flexionHistory: flexionHistory, deltaHistory: deltaHistory,
+        return AthleteReadiness(
+            id: athlete.id, name: athlete.name, jersey: athlete.jersey, position: athlete.position,
+            fatigueDegradationPct: max(0, degradation), status: status, trend: trend,
+            recommendation: recommendation, valgusHistory: athlete.sessions,
+            flexionHistory: flexionHistory, deltaHistory: deltaHistory,
             baselineValgus: baselineValgus, latestFatiguedValgus: latestFatigued,
-            sessionCount: athlete.sessions.count, allSessions: athlete.sessions)
+            sessionCount: athlete.sessions.count, allSessions: athlete.sessions
+        )
     }
 
-    var allReadiness: [AthleteReadiness] { athletes.map { readiness(for: $0) }.sorted { $0.fatigueDegradationPct > $1.fatigueDegradationPct } }
+
+    var allReadiness: [AthleteReadiness] {
+        athletes.map { readiness(for: $0) }.sorted { $0.fatigueDegradationPct > $1.fatigueDegradationPct }
+    }
 
     var teamScore: Int {
         let r = allReadiness; guard !r.isEmpty else { return 100 }
@@ -231,11 +266,12 @@ class DataEngine {
         return Int(min(100, max(0, avg)))
     }
 
-    var weekSessionCount: Int {
-        athletes.flatMap(\.sessions).filter { Calendar.current.isDate($0.date, equalTo: Date(), toGranularity: .weekOfYear) }.count
+    var statusSummary: (good: Int, caution: Int, atRisk: Int) {
+        let r = allReadiness
+        return (r.filter { $0.status == .good }.count,
+                r.filter { $0.status == .caution }.count,
+                r.filter { $0.status == .atRisk }.count)
     }
-
-    var biggestMover: AthleteReadiness? { allReadiness.first }
 
     var teamDeltaTrend: [DataPoint] {
         guard let first = athletes.first else { return [] }
@@ -256,8 +292,27 @@ class DataEngine {
         athletes.append(Athlete(id: UUID(), name: name, jersey: jersey, position: position, sessions: []))
         save()
     }
+
     func removeAthlete(_ id: UUID) { athletes.removeAll { $0.id == id }; save() }
-    func resetDemo() { athletes.removeAll(); loadDemoData(); save() }
+
+    func resetDemo() { athletes.removeAll(); loadDemoData() }
+
+    func requestNotificationPermission() {
+        UNUserNotificationCenter.current().requestAuthorization(options: [.alert, .sound, .badge]) { granted, _ in
+            DispatchQueue.main.async { self.notificationsEnabled = granted }
+        }
+    }
+
+    func scheduleAtRiskNotification(name: String, degradation: Int) {
+        guard notificationsEnabled else { return }
+        let content = UNMutableNotificationContent()
+        content.title = "Landing Risk Alert"
+        content.body = "\(name)'s landing degraded \(degradation)% — review recommended"
+        content.sound = .default
+        let trigger = UNTimeIntervalNotificationTrigger(timeInterval: 2, repeats: false)
+        let request = UNNotificationRequest(identifier: UUID().uuidString, content: content, trigger: trigger)
+        UNUserNotificationCenter.current().add(request)
+    }
 }
 
 
@@ -268,56 +323,172 @@ struct BuddyAppApp: App {
     var body: some Scene {
         WindowGroup {
             Group {
-                if engine.isSignedIn {
+                if engine.showSplash {
+                    AnimatedSplashView()
+                        .transition(.opacity)
+                } else if engine.isSignedIn {
                     if engine.hasCompletedOnboarding {
                         MainTabView()
-                            .transition(.opacity.combined(with: .move(edge: .trailing)))
+                            .transition(.asymmetric(
+                                insertion: .move(edge: .trailing).combined(with: .opacity),
+                                removal: .move(edge: .leading).combined(with: .opacity)
+                            ))
                     } else {
                         TeamSetupView()
-                            .transition(.opacity.combined(with: .move(edge: .trailing)))
+                            .transition(.opacity.combined(with: .scale(scale: 0.95)))
                     }
                 } else {
                     OnboardingView()
                         .transition(.opacity)
                 }
             }
-            .animation(.easeInOut(duration: 0.4), value: engine.isSignedIn)
-            .animation(.easeInOut(duration: 0.4), value: engine.hasCompletedOnboarding)
+            .animation(.spring(response: 0.5, dampingFraction: 0.8), value: engine.isSignedIn)
+            .animation(.spring(response: 0.5, dampingFraction: 0.8), value: engine.hasCompletedOnboarding)
+            .animation(.spring(response: 0.4, dampingFraction: 0.75), value: engine.showSplash)
             .environment(engine)
             .preferredColorScheme(.dark)
         }
     }
 }
 
-// MARK: - Onboarding
+
+// MARK: - Animated Splash
+struct AnimatedSplashView: View {
+    @Environment(DataEngine.self) private var engine
+    @State private var logoScale: CGFloat = 0.3
+    @State private var glowRadius: CGFloat = 0
+    @State private var glowOpacity: Double = 0
+    @State private var landerOpacity: Double = 0
+    @State private var buddyOpacity: Double = 0
+    @State private var ringRotation: Double = 0
+
+    var body: some View {
+        ZStack {
+            Color.black.ignoresSafeArea()
+            VStack(spacing: 16) {
+                ZStack {
+                    // Pulsing glow ring
+                    Circle()
+                        .stroke(Color.brand.opacity(glowOpacity), lineWidth: 3)
+                        .frame(width: 120, height: 120)
+                        .shadow(color: Color.brand.opacity(glowOpacity * 0.8), radius: glowRadius)
+                        .rotationEffect(.degrees(ringRotation))
+                    // Logo icon
+                    Image(systemName: "figure.run")
+                        .font(.system(size: 54, weight: .bold))
+                        .foregroundStyle(Color.brand)
+                        .shadow(color: Color.brandGlow, radius: glowRadius)
+                        .scaleEffect(logoScale)
+                }
+                Text("LANDER")
+                    .font(.system(size: 38, weight: .black, design: .default))
+                    .foregroundStyle(.white)
+                    .opacity(landerOpacity)
+                Text("BUDDY")
+                    .font(.system(size: 18, weight: .semibold, design: .default))
+                    .foregroundStyle(Color.brand)
+                    .opacity(buddyOpacity)
+                    .shadow(color: Color.brandGlow, radius: 4)
+            }
+        }
+        .onAppear {
+            withAnimation(.spring(response: 0.6, dampingFraction: 0.6)) {
+                logoScale = 1.0
+            }
+            withAnimation(.easeInOut(duration: 0.8).delay(0.2)) {
+                glowRadius = 20; glowOpacity = 0.7
+            }
+            withAnimation(.linear(duration: 2.0).delay(0.1)) {
+                ringRotation = 360
+            }
+            withAnimation(.easeIn(duration: 0.4).delay(0.5)) {
+                landerOpacity = 1.0
+            }
+            withAnimation(.easeIn(duration: 0.4).delay(0.8)) {
+                buddyOpacity = 1.0
+            }
+            DispatchQueue.main.asyncAfter(deadline: .now() + 2.0) {
+                withAnimation(.spring(response: 0.4, dampingFraction: 0.75)) {
+                    engine.showSplash = false
+                }
+            }
+        }
+    }
+}
+
+
+// MARK: - Onboarding (Sign In)
 struct OnboardingView: View {
     @Environment(DataEngine.self) private var engine
+    @State private var logoScale: CGFloat = 0.8
+    @State private var contentOpacity: Double = 0
+
     var body: some View {
         ZStack {
             Color.bgPrimary.ignoresSafeArea()
-            VStack(spacing: 24) {
+            // Subtle radial gradient glow behind logo
+            RadialGradient(colors: [Color.brand.opacity(0.08), .clear], center: .center, startRadius: 20, endRadius: 250)
+                .ignoresSafeArea()
+            VStack(spacing: 28) {
                 Spacer()
-                Image(systemName: "figure.run")
-                    .font(.system(size: 64, weight: .bold))
-                    .foregroundStyle(Color.brand)
-                Text("LANDER").font(.system(size: 42, weight: .black)).foregroundStyle(.white)
-                Text("BUDDY").font(.system(size: 20, weight: .semibold)).foregroundStyle(Color.brand)
-                Text("Spot injury risk before it happens")
-                    .font(.subheadline).foregroundStyle(Color.textSecondary)
+                VStack(spacing: 12) {
+                    Image(systemName: "figure.run")
+                        .font(.system(size: 72, weight: .bold))
+                        .foregroundStyle(Color.brand)
+                        .shadow(color: Color.brandGlow, radius: 12)
+                        .scaleEffect(logoScale)
+                    Text("LANDER")
+                        .font(.system(size: 44, weight: .black))
+                        .foregroundStyle(.white)
+                    Text("BUDDY")
+                        .font(.system(size: 20, weight: .semibold))
+                        .foregroundStyle(Color.brand)
+                    Text("Spot injury risk before it happens")
+                        .font(.subheadline)
+                        .foregroundStyle(Color.textSecondary)
+                        .padding(.top, 4)
+                }
                 Spacer()
-                SignInWithAppleButton(.signIn) { _ in } onCompletion: { _ in engine.isSignedIn = true }
+                VStack(spacing: 14) {
+                    SignInWithAppleButton(.signIn) { _ in } onCompletion: { _ in
+                        triggerSignIn()
+                    }
                     .signInWithAppleButtonStyle(.white)
-                    .frame(height: 50).cornerRadius(12).padding(.horizontal, 40)
-                Button { engine.isSignedIn = true } label: {
-                    HStack { Image(systemName: "g.circle.fill"); Text("Continue with Google") }
-                        .frame(maxWidth: .infinity).frame(height: 50)
-                        .background(Color.cardBg).cornerRadius(12).foregroundStyle(.white)
-                }.padding(.horizontal, 40)
-                Button("Skip — use demo data") { engine.hasCompletedOnboarding = true; engine.isSignedIn = true }
+                    .frame(height: 52)
+                    .cornerRadius(14)
+                    .padding(.horizontal, 36)
+
+                    Button { triggerSignIn() } label: {
+                        HStack(spacing: 8) {
+                            Image(systemName: "g.circle.fill").font(.title3)
+                            Text("Continue with Google").font(.subheadline.bold())
+                        }
+                        .frame(maxWidth: .infinity).frame(height: 52)
+                        .background(Color.bgCard).cornerRadius(14)
+                        .foregroundStyle(.white)
+                    }.padding(.horizontal, 36)
+
+                    Button("Skip — use demo data") {
+                        engine.hasCompletedOnboarding = true
+                        engine.showSplash = true
+                        engine.isSignedIn = true
+                    }
                     .font(.footnote).foregroundStyle(Color.textSecondary)
-                Spacer().frame(height: 40)
+                    .padding(.top, 4)
+                }
+                .opacity(contentOpacity)
+                Spacer().frame(height: 50)
             }
         }
+        .onAppear {
+            withAnimation(.spring(response: 0.8, dampingFraction: 0.6)) { logoScale = 1.0 }
+            withAnimation(.easeIn(duration: 0.5).delay(0.3)) { contentOpacity = 1.0 }
+        }
+    }
+
+    private func triggerSignIn() {
+        engine.showSplash = true
+        engine.isSignedIn = true
     }
 }
 
@@ -327,58 +498,75 @@ struct TeamSetupView: View {
     @Environment(DataEngine.self) private var engine
     @State private var teamNameInput = ""
     @State private var coachNameInput = ""
-    @State private var sportType = "Soccer"
-    private let sportOptions = ["Soccer", "Basketball", "Volleyball", "Track & Field", "Football", "Other"]
+    @State private var selectedSport = "Soccer"
+    @State private var appeared = false
+    private let sportOptions = ["Soccer", "Basketball", "Volleyball", "Track", "Football", "Other"]
 
     var body: some View {
         ZStack {
             Color.bgPrimary.ignoresSafeArea()
-            VStack(spacing: 24) {
+            RadialGradient(colors: [Color.brand.opacity(0.05), .clear], center: .top, startRadius: 0, endRadius: 400)
+                .ignoresSafeArea()
+            VStack(spacing: 28) {
                 Spacer()
                 Image(systemName: "person.3.fill")
-                    .font(.system(size: 48)).foregroundStyle(Color.brand)
-                Text("Set Up Your Team").font(.title2.bold()).foregroundStyle(.white)
+                    .font(.system(size: 52)).foregroundStyle(Color.brand)
+                    .shadow(color: Color.brandGlow, radius: 8)
+                Text("Set Up Your Team")
+                    .font(.title2.bold()).foregroundStyle(.white)
                 Text("Tell us about your team to get started")
                     .font(.subheadline).foregroundStyle(Color.textSecondary)
 
-                VStack(spacing: 16) {
+                VStack(spacing: 18) {
+                    FloatingTextField(label: "Team Name", placeholder: "e.g. FC Thunder", text: $teamNameInput)
                     VStack(alignment: .leading, spacing: 6) {
-                        Text("Team Name").font(.caption).foregroundStyle(Color.textSecondary)
-                        TextField("e.g. FC Thunder", text: $teamNameInput)
-                            .padding(12).background(Color.cardBg).cornerRadius(10)
-                            .foregroundStyle(.white)
-                    }
-                    VStack(alignment: .leading, spacing: 6) {
-                        Text("Sport").font(.caption).foregroundStyle(Color.textSecondary)
-                        Picker("Sport", selection: $sportType) {
+                        Text("Sport").font(.caption.bold()).foregroundStyle(Color.textSecondary)
+                        Picker("Sport", selection: $selectedSport) {
                             ForEach(sportOptions, id: \.self) { Text($0) }
-                        }.pickerStyle(.menu).tint(Color.brand)
-                            .padding(8).frame(maxWidth: .infinity, alignment: .leading)
-                            .background(Color.cardBg).cornerRadius(10)
+                        }.pickerStyle(.segmented).tint(Color.brand)
                     }
-                    VStack(alignment: .leading, spacing: 6) {
-                        Text("Coach Name").font(.caption).foregroundStyle(Color.textSecondary)
-                        TextField("e.g. Coach Davis", text: $coachNameInput)
-                            .padding(12).background(Color.cardBg).cornerRadius(10)
-                            .foregroundStyle(.white)
-                    }
-                }.padding(.horizontal, 32)
+                    FloatingTextField(label: "Coach Name", placeholder: "e.g. Coach Davis", text: $coachNameInput)
+                }.padding(.horizontal, 28)
 
                 Spacer()
                 Button {
                     engine.storedTeamName = teamNameInput.isEmpty ? "My Team" : teamNameInput
                     engine.storedCoachName = coachNameInput.isEmpty ? "Coach" : coachNameInput
-                    engine.storedSportType = sportType
+                    engine.storedSportType = selectedSport
                     engine.teamName = engine.storedTeamName
                     engine.userName = engine.storedCoachName
+                    engine.sportType = selectedSport
+                    engine.requestNotificationPermission()
                     engine.hasCompletedOnboarding = true
+                    engine.showSplash = true
                 } label: {
-                    Text("Get Started").frame(maxWidth: .infinity).padding()
+                    Text("Get Started")
+                        .font(.headline).frame(maxWidth: .infinity).padding()
                         .background(Color.brand).foregroundStyle(.black)
-                        .cornerRadius(12).bold()
-                }.padding(.horizontal, 32)
-                Spacer().frame(height: 40)
+                        .cornerRadius(14)
+                }.padding(.horizontal, 28)
+                Spacer().frame(height: 50)
             }
+            .opacity(appeared ? 1 : 0)
+            .offset(y: appeared ? 0 : 20)
+        }
+        .onAppear {
+            withAnimation(.easeOut(duration: 0.5)) { appeared = true }
+        }
+    }
+}
+
+struct FloatingTextField: View {
+    let label: String; let placeholder: String
+    @Binding var text: String
+    var body: some View {
+        VStack(alignment: .leading, spacing: 6) {
+            Text(label).font(.caption.bold()).foregroundStyle(Color.textSecondary)
+            TextField(placeholder, text: $text)
+                .padding(14).background(Color.bgCard).cornerRadius(12)
+                .foregroundStyle(.white).overlay(
+                    RoundedRectangle(cornerRadius: 12).stroke(Color.bgCardLight, lineWidth: 1)
+                )
         }
     }
 }
@@ -394,143 +582,44 @@ struct MainTabView: View {
             RosterView().tabItem { Label("Roster", systemImage: "person.3.fill") }
             HistoryView().tabItem { Label("History", systemImage: "clock.fill") }
             SettingsView().tabItem { Label("Settings", systemImage: "gearshape.fill") }
-        }.tint(Color.brand)
+        }
+        .tint(Color.brand)
         .opacity(appeared ? 1.0 : 0.0)
-        .onAppear { withAnimation(.easeInOut(duration: 0.3)) { appeared = true } }
+        .onAppear { withAnimation(.easeInOut(duration: 0.4)) { appeared = true } }
     }
 }
 
-// MARK: - Sparkline (Inverted Y-axis: lower values = top, higher = bottom)
-struct SparklineView: View {
-    let points: [Double]
-    let color: Color
+// MARK: - Card Press Style
+struct CardPressStyle: ButtonStyle {
+    func makeBody(configuration: Configuration) -> some View {
+        configuration.label
+            .scaleEffect(configuration.isPressed ? 0.97 : 1.0)
+            .animation(.spring(response: 0.2, dampingFraction: 0.7), value: configuration.isPressed)
+    }
+}
+
+
+// MARK: - Shared UI Components
+struct JerseyCircle: View {
+    let number: Int; let size: CGFloat; var glowing: Bool = false
     var body: some View {
-        GeometryReader { geo in
-            if points.count > 1 {
-                let mn = points.min()!; let mx = points.max()!
-                let range = mx - mn == 0 ? 1 : mx - mn
-                Path { path in
-                    for (i, val) in points.enumerated() {
-                        let x = geo.size.width * CGFloat(i) / CGFloat(points.count - 1)
-                        // Inverted: higher values go DOWN (bad), lower values go UP (good)
-                        let y = geo.size.height * CGFloat((val - mn) / range)
-                        if i == 0 { path.move(to: CGPoint(x: x, y: y)) }
-                        else { path.addLine(to: CGPoint(x: x, y: y)) }
-                    }
-                }.stroke(color, lineWidth: 1.5)
+        ZStack {
+            Circle()
+                .fill(Color.brand.opacity(0.15))
+                .frame(width: size, height: size)
+            if glowing {
+                Circle()
+                    .stroke(Color.statusRed.opacity(0.6), lineWidth: 2)
+                    .frame(width: size, height: size)
+                    .shadow(color: Color.statusRed.opacity(0.5), radius: 6)
             }
+            Text("#\(number)")
+                .font(.system(size: size * 0.3, weight: .bold, design: .rounded))
+                .foregroundStyle(Color.brand)
         }
     }
 }
 
-
-// MARK: - Line Chart (with axis labels, fresh/fatigued markers, baseline legend)
-struct LineChartView: View {
-    let data: [DataPoint]
-    let baselineValue: Double?
-    let lineColor: Color
-    let title: String
-    let unit: String
-    var showFreshFatigued: Bool = false
-
-    var body: some View {
-        VStack(alignment: .leading, spacing: 4) {
-            Text(title).font(.caption).foregroundStyle(Color.textSecondary)
-            HStack(spacing: 0) {
-                // Y-axis labels
-                let values = data.map(\.value)
-                let allVals = baselineValue != nil ? values + [baselineValue!] : values
-                let mn = allVals.min() ?? 0; let mx = allVals.max() ?? 1
-                VStack {
-                    Text(String(format: "%.1f", mx)).font(.system(size: 8)).foregroundStyle(Color.textSecondary)
-                    Spacer()
-                    Text(String(format: "%.1f", mn)).font(.system(size: 8)).foregroundStyle(Color.textSecondary)
-                }.frame(width: 28, height: 120)
-
-                // Chart area
-                GeometryReader { geo in
-                    let range = mx - mn == 0 ? 1 : mx - mn
-                    let h = geo.size.height; let w = geo.size.width
-
-                    ZStack {
-                        // Fill gradient
-                        Path { path in
-                            for (i, val) in values.enumerated() {
-                                let x = w * CGFloat(i) / CGFloat(max(values.count - 1, 1))
-                                let y = h * (1 - CGFloat((val - mn) / range))
-                                if i == 0 { path.move(to: CGPoint(x: x, y: y)) }
-                                else { path.addLine(to: CGPoint(x: x, y: y)) }
-                            }
-                            path.addLine(to: CGPoint(x: w, y: h))
-                            path.addLine(to: CGPoint(x: 0, y: h))
-                            path.closeSubpath()
-                        }.fill(LinearGradient(colors: [lineColor.opacity(0.3), lineColor.opacity(0.0)], startPoint: .top, endPoint: .bottom))
-
-                        // Line
-                        Path { path in
-                            for (i, val) in values.enumerated() {
-                                let x = w * CGFloat(i) / CGFloat(max(values.count - 1, 1))
-                                let y = h * (1 - CGFloat((val - mn) / range))
-                                if i == 0 { path.move(to: CGPoint(x: x, y: y)) }
-                                else { path.addLine(to: CGPoint(x: x, y: y)) }
-                            }
-                        }.stroke(lineColor, lineWidth: 2.5)
-
-                        // Fresh/Fatigued dot markers
-                        if showFreshFatigued {
-                            ForEach(Array(data.enumerated()), id: \.offset) { i, dp in
-                                let x = w * CGFloat(i) / CGFloat(max(data.count - 1, 1))
-                                let y = h * (1 - CGFloat((dp.value - mn) / range))
-                                Circle()
-                                    .fill(dp.isFresh ? Color.statusGreen : Color.statusYellow)
-                                    .frame(width: dp.isFresh ? 5 : 7, height: dp.isFresh ? 5 : 7)
-                                    .overlay(dp.isFresh ? Circle().stroke(Color.statusGreen, lineWidth: 1.5).frame(width: 7, height: 7) : nil)
-                                    .position(x: x, y: y)
-                            }
-                        }
-
-                        // Baseline dashed
-                        if let bl = baselineValue {
-                            let by = h * (1 - CGFloat((bl - mn) / range))
-                            Path { path in path.move(to: CGPoint(x: 0, y: by)); path.addLine(to: CGPoint(x: w, y: by)) }
-                                .stroke(Color.textSecondary, style: StrokeStyle(lineWidth: 1, dash: [5, 4]))
-                        }
-                    }
-                }.frame(height: 120)
-            }
-            // X-axis date labels
-            if let first = data.first, let last = data.last {
-                HStack {
-                    Spacer().frame(width: 28)
-                    Text(first.date, format: .dateTime.month(.abbreviated).day()).font(.system(size: 8)).foregroundStyle(Color.textSecondary)
-                    Spacer()
-                    Text(last.date, format: .dateTime.month(.abbreviated).day()).font(.system(size: 8)).foregroundStyle(Color.textSecondary)
-                }
-            }
-            // Baseline legend
-            if baselineValue != nil {
-                HStack(spacing: 4) {
-                    Path { path in path.move(to: .zero); path.addLine(to: CGPoint(x: 16, y: 0)) }
-                        .stroke(Color.textSecondary, style: StrokeStyle(lineWidth: 1, dash: [3, 2]))
-                        .frame(width: 16, height: 1)
-                    Text("Baseline").font(.system(size: 9)).foregroundStyle(Color.textSecondary)
-                    if showFreshFatigued {
-                        Spacer().frame(width: 8)
-                        Circle().fill(Color.statusGreen).frame(width: 5, height: 5)
-                        Text("Fresh").font(.system(size: 9)).foregroundStyle(Color.textSecondary)
-                        Circle().fill(Color.statusYellow).frame(width: 6, height: 6)
-                        Text("Fatigued").font(.system(size: 9)).foregroundStyle(Color.textSecondary)
-                    }
-                }.padding(.leading, 28)
-            }
-            HStack { Spacer().frame(width: 28); Text(unit).font(.caption2).foregroundStyle(Color.textSecondary); Spacer() }
-        }
-        .padding().background(Color.cardBg).cornerRadius(12)
-    }
-}
-
-
-// MARK: - Status & Trend Helpers
 struct StatusBadge: View {
     let status: AthleteStatus
     var color: Color {
@@ -542,11 +631,12 @@ struct StatusBadge: View {
         }
     }
     var body: some View {
-        Text(status.rawValue).font(.caption2.bold())
-            .padding(.horizontal, 8).padding(.vertical, 3)
-            .background(color.opacity(0.2)).foregroundStyle(color)
-            .cornerRadius(6)
-            .animation(.spring(response: 0.4, dampingFraction: 0.7), value: status.rawValue)
+        Text(status.rawValue).font(.system(size: 10, weight: .bold))
+            .padding(.horizontal, 8).padding(.vertical, 4)
+            .background(color.opacity(0.15))
+            .foregroundStyle(color)
+            .clipShape(Capsule())
+            .animation(.spring(response: 0.4, dampingFraction: 0.7), value: status)
     }
 }
 
@@ -568,221 +658,596 @@ struct TrendBadge: View {
     }
     var body: some View {
         HStack(spacing: 3) {
-            Image(systemName: icon).font(.caption2)
-            Text(trend.rawValue).font(.system(size: 10).bold())
-                .lineLimit(1).minimumScaleFactor(0.8)
-        }.foregroundStyle(color)
+            Image(systemName: icon).font(.system(size: 9, weight: .bold))
+            Text(trend.rawValue).font(.system(size: 10, weight: .bold))
+        }
+        .padding(.horizontal, 7).padding(.vertical, 4)
+        .background(color.opacity(0.1))
+        .foregroundStyle(color)
+        .clipShape(Capsule())
     }
 }
 
-struct JerseyCircle: View {
-    let number: Int; let size: CGFloat
+
+// MARK: - Sparkline (Inverted Y: higher = worse = down)
+struct SparklineView: View {
+    let points: [Double]
+    let color: Color
     var body: some View {
-        ZStack {
-            Circle().fill(Color.brand.opacity(0.15)).frame(width: size, height: size)
-            Text("#\(number)").font(.system(size: size * 0.32, weight: .bold)).foregroundStyle(Color.brand)
+        GeometryReader { geo in
+            if points.count > 1 {
+                let mn = points.min()!; let mx = points.max()!
+                let range = mx - mn == 0 ? 1 : mx - mn
+                Path { path in
+                    for (i, val) in points.enumerated() {
+                        let x = geo.size.width * CGFloat(i) / CGFloat(points.count - 1)
+                        let y = geo.size.height * CGFloat((val - mn) / range)
+                        if i == 0 { path.move(to: CGPoint(x: x, y: y)) }
+                        else { path.addLine(to: CGPoint(x: x, y: y)) }
+                    }
+                }.stroke(color, lineWidth: 1.8)
+            }
         }
     }
 }
 
+// MARK: - Area Chart (for team trend)
+struct AreaChartView: View {
+    let data: [DataPoint]
+    let lineColor: Color
+    @State private var appeared = false
 
-// MARK: - Dashboard
+    var body: some View {
+        GeometryReader { geo in
+            let values = data.map(\.value)
+            let mn = (values.min() ?? 0) - 1
+            let mx = (values.max() ?? 1) + 1
+            let range = mx - mn == 0 ? 1 : mx - mn
+            let h = geo.size.height; let w = geo.size.width
+
+            ZStack(alignment: .leading) {
+                // Y-axis labels
+                VStack {
+                    Text(String(format: "%.0f%%", mx)).font(.system(size: 9)).foregroundStyle(Color.textSecondary)
+                    Spacer()
+                    Text(String(format: "%.0f%%", mn)).font(.system(size: 9)).foregroundStyle(Color.textSecondary)
+                }.frame(width: 30)
+
+                // Chart area
+                ZStack {
+                    // Gradient fill
+                    Path { path in
+                        for (i, val) in values.enumerated() {
+                            let x = 30 + (w - 30) * CGFloat(i) / CGFloat(max(values.count - 1, 1))
+                            let y = h * (1 - CGFloat((val - mn) / range))
+                            if i == 0 { path.move(to: CGPoint(x: x, y: y)) }
+                            else { path.addLine(to: CGPoint(x: x, y: y)) }
+                        }
+                        path.addLine(to: CGPoint(x: w, y: h))
+                        path.addLine(to: CGPoint(x: 30, y: h))
+                        path.closeSubpath()
+                    }
+                    .fill(LinearGradient(colors: [lineColor.opacity(0.35), lineColor.opacity(0.05)], startPoint: .top, endPoint: .bottom))
+
+                    // Line
+                    Path { path in
+                        for (i, val) in values.enumerated() {
+                            let x = 30 + (w - 30) * CGFloat(i) / CGFloat(max(values.count - 1, 1))
+                            let y = h * (1 - CGFloat((val - mn) / range))
+                            if i == 0 { path.move(to: CGPoint(x: x, y: y)) }
+                            else { path.addLine(to: CGPoint(x: x, y: y)) }
+                        }
+                    }.stroke(lineColor, lineWidth: 2.5)
+
+                    // 0% baseline
+                    if mn < 0 && mx > 0 {
+                        let zeroY = h * (1 - CGFloat((0 - mn) / range))
+                        Path { p in p.move(to: CGPoint(x: 30, y: zeroY)); p.addLine(to: CGPoint(x: w, y: zeroY)) }
+                            .stroke(Color.textSecondary.opacity(0.4), style: StrokeStyle(lineWidth: 1, dash: [4, 3]))
+                    }
+                }
+            }
+            .opacity(appeared ? 1 : 0)
+            .offset(y: appeared ? 0 : 12)
+        }
+        .onAppear { withAnimation(.easeOut(duration: 0.5).delay(0.2)) { appeared = true } }
+    }
+}
+
+
+// MARK: - Line Chart (with axis labels, markers, baseline, gradient fill)
+struct LineChartView: View {
+    let data: [DataPoint]
+    let baselineValue: Double?
+    let lineColor: Color
+    let title: String
+    let unit: String
+    var showFreshFatigued: Bool = false
+    @State private var appeared = false
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 6) {
+            Text(title).font(.caption.bold()).foregroundStyle(Color.textSecondary)
+            HStack(spacing: 0) {
+                let values = data.map(\.value)
+                let allVals = baselineValue != nil ? values + [baselineValue!] : values
+                let mn = (allVals.min() ?? 0) - 0.5
+                let mx = (allVals.max() ?? 1) + 0.5
+                VStack {
+                    Text(String(format: "%.1f", mx)).font(.system(size: 8)).foregroundStyle(Color.textSecondary)
+                    Spacer()
+                    Text(String(format: "%.1f", mn)).font(.system(size: 8)).foregroundStyle(Color.textSecondary)
+                }.frame(width: 30, height: 130)
+
+                GeometryReader { geo in
+                    let range = mx - mn == 0 ? 1 : mx - mn
+                    let h = geo.size.height; let w = geo.size.width
+                    ZStack {
+                        // Gradient fill
+                        Path { path in
+                            for (i, val) in values.enumerated() {
+                                let x = w * CGFloat(i) / CGFloat(max(values.count - 1, 1))
+                                let y = h * (1 - CGFloat((val - mn) / range))
+                                if i == 0 { path.move(to: CGPoint(x: x, y: y)) }
+                                else { path.addLine(to: CGPoint(x: x, y: y)) }
+                            }
+                            path.addLine(to: CGPoint(x: w, y: h))
+                            path.addLine(to: CGPoint(x: 0, y: h))
+                            path.closeSubpath()
+                        }.fill(LinearGradient(colors: [lineColor.opacity(0.25), lineColor.opacity(0.02)], startPoint: .top, endPoint: .bottom))
+
+                        // Line
+                        Path { path in
+                            for (i, val) in values.enumerated() {
+                                let x = w * CGFloat(i) / CGFloat(max(values.count - 1, 1))
+                                let y = h * (1 - CGFloat((val - mn) / range))
+                                if i == 0 { path.move(to: CGPoint(x: x, y: y)) }
+                                else { path.addLine(to: CGPoint(x: x, y: y)) }
+                            }
+                        }.stroke(lineColor, lineWidth: 2.5)
+
+                        // Fresh/Fatigued dots
+                        if showFreshFatigued {
+                            ForEach(Array(data.enumerated()), id: \.offset) { i, dp in
+                                let x = w * CGFloat(i) / CGFloat(max(data.count - 1, 1))
+                                let y = h * (1 - CGFloat((dp.value - mn) / range))
+                                Circle()
+                                    .fill(dp.isFresh ? Color.statusGreen : Color.statusYellow)
+                                    .frame(width: dp.isFresh ? 5 : 6, height: dp.isFresh ? 5 : 6)
+                                    .position(x: x, y: y)
+                            }
+                        }
+
+                        // Baseline dashed line
+                        if let bl = baselineValue {
+                            let by = h * (1 - CGFloat((bl - mn) / range))
+                            Path { p in p.move(to: CGPoint(x: 0, y: by)); p.addLine(to: CGPoint(x: w, y: by)) }
+                                .stroke(Color.textSecondary.opacity(0.6), style: StrokeStyle(lineWidth: 1, dash: [5, 4]))
+                        }
+                    }
+                }.frame(height: 130)
+            }
+            // X-axis labels
+            if let first = data.first, let last = data.last {
+                HStack {
+                    Spacer().frame(width: 30)
+                    Text(first.date, format: .dateTime.month(.abbreviated).day())
+                        .font(.system(size: 8)).foregroundStyle(Color.textSecondary)
+                    Spacer()
+                    Text(last.date, format: .dateTime.month(.abbreviated).day())
+                        .font(.system(size: 8)).foregroundStyle(Color.textSecondary)
+                }
+            }
+            // Legend
+            HStack(spacing: 8) {
+                if baselineValue != nil {
+                    HStack(spacing: 3) {
+                        Rectangle().fill(Color.textSecondary).frame(width: 12, height: 1)
+                        Text("Baseline").font(.system(size: 9)).foregroundStyle(Color.textSecondary)
+                    }
+                }
+                if showFreshFatigued {
+                    HStack(spacing: 3) {
+                        Circle().fill(Color.statusGreen).frame(width: 5, height: 5)
+                        Text("Fresh").font(.system(size: 9)).foregroundStyle(Color.textSecondary)
+                    }
+                    HStack(spacing: 3) {
+                        Circle().fill(Color.statusYellow).frame(width: 5, height: 5)
+                        Text("Fatigued").font(.system(size: 9)).foregroundStyle(Color.textSecondary)
+                    }
+                }
+            }.padding(.leading, 30)
+        }
+        .padding(14)
+        .background(Color.bgCard)
+        .cornerRadius(14)
+        .opacity(appeared ? 1 : 0)
+        .offset(y: appeared ? 0 : 12)
+        .onAppear { withAnimation(.easeOut(duration: 0.4).delay(0.1)) { appeared = true } }
+    }
+}
+
+
+// MARK: - Dashboard (Complete Redesign)
 struct DashboardView: View {
     @Environment(DataEngine.self) private var engine
+    @State private var heroAppeared = false
+    @State private var alertAppeared = false
+    @State private var trendAppeared = false
+    @State private var listAppeared = false
+
     var body: some View {
         NavigationStack {
             ScrollView {
-                VStack(spacing: 16) {
-                    // Top metric cards
-                    HStack(spacing: 12) {
-                        MetricCard(title: "Team Score", value: "\(engine.teamScore)", subtitle: "/ 100", color: .brand)
-                        MetricCard(title: "This Week", value: "\(engine.weekSessionCount)", subtitle: "sessions", color: Color.statusGreen)
-                        if let mover = engine.biggestMover {
-                            MetricCard(title: "Biggest Mover", value: "\(Int(mover.fatigueDegradationPct))%", subtitle: mover.name, color: Color.statusRed)
-                        }
-                    }.padding(.horizontal)
+                VStack(spacing: 18) {
+                    // Hero Card: Team Readiness Score with circular progress ring
+                    HeroScoreCard(score: engine.teamScore, summary: engine.statusSummary)
+                        .padding(.horizontal)
+                        .opacity(heroAppeared ? 1 : 0)
+                        .offset(y: heroAppeared ? 0 : 16)
 
-                    // Alert banner
-                    let atRisk = engine.allReadiness.filter { $0.status == .atRisk }
-                    if !atRisk.isEmpty {
-                        HStack {
-                            Image(systemName: "exclamationmark.triangle.fill").foregroundStyle(Color.statusRed)
-                            Text("\(atRisk.count) athlete\(atRisk.count > 1 ? "s" : "") at risk — tap for details")
-                                .font(.caption).foregroundStyle(.white)
-                            Spacer()
-                        }.padding(12).background(Color.statusRed.opacity(0.15)).cornerRadius(10).padding(.horizontal)
-                    }
-
-                    // Team trend chart with "6 wks" label
-                    if engine.teamDeltaTrend.count > 1 {
-                        VStack(alignment: .leading, spacing: 4) {
-                            HStack {
-                                Text("Team Avg Fatigue Delta").font(.caption).foregroundStyle(Color.textSecondary)
-                                Spacer()
-                                Text("6 wks").font(.system(size: 9)).foregroundStyle(Color.textSecondary)
+                    // Alert Section: At Risk athletes
+                    let atRiskAthletes = engine.allReadiness.filter { $0.status == .atRisk }
+                    if !atRiskAthletes.isEmpty {
+                        VStack(spacing: 8) {
+                            ForEach(atRiskAthletes) { athlete in
+                                AlertCard(readiness: athlete)
                             }
-                            SparklineView(points: engine.teamDeltaTrend.map(\.value), color: .brand)
-                                .frame(height: 50)
-                        }.padding().background(Color.cardBg).cornerRadius(12).padding(.horizontal)
+                        }
+                        .padding(.horizontal)
+                        .opacity(alertAppeared ? 1 : 0)
+                        .offset(y: alertAppeared ? 0 : 12)
                     }
 
-                    // Athlete list sorted worst-first
-                    VStack(spacing: 8) {
+                    // Team Trend Area Chart
+                    if engine.teamDeltaTrend.count > 1 {
+                        VStack(alignment: .leading, spacing: 8) {
+                            HStack {
+                                Text("Team Avg Fatigue Delta")
+                                    .font(.caption.bold()).foregroundStyle(Color.textSecondary)
+                                Spacer()
+                                Text("6 weeks")
+                                    .font(.system(size: 10, weight: .medium))
+                                    .foregroundStyle(Color.brand.opacity(0.7))
+                                    .padding(.horizontal, 8).padding(.vertical, 3)
+                                    .background(Color.brand.opacity(0.1))
+                                    .clipShape(Capsule())
+                            }
+                            AreaChartView(data: engine.teamDeltaTrend, lineColor: .brand)
+                                .frame(height: 110)
+                        }
+                        .padding(14)
+                        .background(Color.bgCard)
+                        .cornerRadius(14)
+                        .padding(.horizontal)
+                        .opacity(trendAppeared ? 1 : 0)
+                        .offset(y: trendAppeared ? 0 : 12)
+                    }
+
+                    // Athlete List
+                    VStack(spacing: 10) {
                         ForEach(engine.allReadiness) { r in
                             NavigationLink(value: r.id) {
                                 AthleteRow(readiness: r)
                             }.buttonStyle(CardPressStyle())
                         }
-                    }.padding(.horizontal)
-                    .animation(.spring(response: 0.3, dampingFraction: 0.8), value: engine.allReadiness.map(\.fatigueDegradationPct))
+                    }
+                    .padding(.horizontal)
+                    .opacity(listAppeared ? 1 : 0)
+                    .offset(y: listAppeared ? 0 : 10)
                 }
                 .padding(.vertical)
             }
+            .refreshable { engine.resetDemo() }
             .background(Color.bgPrimary)
             .navigationTitle("Dashboard")
-            .navigationDestination(for: UUID.self) { id in AthleteDetailView(athleteID: id) }
+            .navigationDestination(for: UUID.self) { id in
+                AthleteDetailView(athleteID: id)
+            }
+        }
+        .onAppear {
+            withAnimation(.easeOut(duration: 0.4).delay(0.1)) { heroAppeared = true }
+            withAnimation(.easeOut(duration: 0.4).delay(0.2)) { alertAppeared = true }
+            withAnimation(.easeOut(duration: 0.4).delay(0.3)) { trendAppeared = true }
+            withAnimation(.easeOut(duration: 0.4).delay(0.4)) { listAppeared = true }
         }
     }
 }
 
-struct MetricCard: View {
-    let title: String; let value: String; let subtitle: String; let color: Color
+
+// MARK: - Hero Score Card
+struct HeroScoreCard: View {
+    let score: Int
+    let summary: (good: Int, caution: Int, atRisk: Int)
+    @State private var ringProgress: CGFloat = 0
+
     var body: some View {
-        VStack(spacing: 4) {
-            Text(title).font(.caption2).foregroundStyle(Color.textSecondary).lineLimit(1)
-            Text(value).font(.title2.bold()).foregroundStyle(color)
-            Text(subtitle).font(.caption2).foregroundStyle(Color.textSecondary)
-                .lineLimit(1).minimumScaleFactor(0.7)
+        VStack(spacing: 14) {
+            Text("TEAM READINESS")
+                .font(.system(size: 11, weight: .bold))
+                .foregroundStyle(Color.textSecondary)
+                .tracking(1.5)
+            ZStack {
+                // Background ring
+                Circle()
+                    .stroke(Color.bgCardLight, lineWidth: 10)
+                    .frame(width: 110, height: 110)
+                // Progress ring
+                Circle()
+                    .trim(from: 0, to: ringProgress)
+                    .stroke(
+                        AngularGradient(colors: [Color.brand, Color.statusGreen, Color.brand], center: .center),
+                        style: StrokeStyle(lineWidth: 10, lineCap: .round)
+                    )
+                    .frame(width: 110, height: 110)
+                    .rotationEffect(.degrees(-90))
+                    .shadow(color: Color.brand.opacity(0.5), radius: 8)
+                // Score number
+                Text("\(score)")
+                    .font(.system(size: 38, weight: .black, design: .rounded))
+                    .foregroundStyle(.white)
+            }
+            // Status summary
+            HStack(spacing: 16) {
+                HStack(spacing: 4) {
+                    Circle().fill(Color.statusGreen).frame(width: 8, height: 8)
+                    Text("\(summary.good) Good").font(.caption).foregroundStyle(Color.textSecondary)
+                }
+                HStack(spacing: 4) {
+                    Circle().fill(Color.statusYellow).frame(width: 8, height: 8)
+                    Text("\(summary.caution) Caution").font(.caption).foregroundStyle(Color.textSecondary)
+                }
+                HStack(spacing: 4) {
+                    Circle().fill(Color.statusRed).frame(width: 8, height: 8)
+                    Text("\(summary.atRisk) At Risk").font(.caption).foregroundStyle(Color.textSecondary)
+                }
+            }
         }
-        .frame(maxWidth: .infinity).padding(12)
-        .background(Color.cardBg).cornerRadius(12)
+        .frame(maxWidth: .infinity)
+        .padding(20)
+        .background(
+            RoundedRectangle(cornerRadius: 18)
+                .fill(Color.bgCard)
+                .shadow(color: Color.brand.opacity(0.08), radius: 20, y: 8)
+        )
+        .onAppear {
+            withAnimation(.easeOut(duration: 1.0).delay(0.3)) {
+                ringProgress = CGFloat(score) / 100.0
+            }
+        }
     }
 }
 
+// MARK: - Alert Card
+struct AlertCard: View {
+    let readiness: AthleteReadiness
+    @State private var pulsing = false
+
+    var body: some View {
+        HStack(spacing: 12) {
+            Image(systemName: "exclamationmark.triangle.fill")
+                .font(.title3).foregroundStyle(Color.statusRed)
+            VStack(alignment: .leading, spacing: 2) {
+                Text(readiness.name).font(.subheadline.bold()).foregroundStyle(.white)
+                Text(readiness.recommendation).font(.caption).foregroundStyle(Color.textSecondary).lineLimit(2)
+            }
+            Spacer()
+            Text("\(Int(readiness.fatigueDegradationPct))%")
+                .font(.title3.bold()).foregroundStyle(Color.statusRed)
+        }
+        .padding(14)
+        .background(Color.bgCard)
+        .overlay(
+            RoundedRectangle(cornerRadius: 14)
+                .stroke(Color.statusRed.opacity(pulsing ? 0.6 : 0.25), lineWidth: 1.5)
+        )
+        .cornerRadius(14)
+        .onAppear {
+            withAnimation(.easeInOut(duration: 1.2).repeatForever(autoreverses: true)) {
+                pulsing = true
+            }
+        }
+    }
+}
+
+
+// MARK: - Athlete Row
 struct AthleteRow: View {
     let readiness: AthleteReadiness
     var body: some View {
         HStack(spacing: 12) {
-            JerseyCircle(number: readiness.jersey, size: 42)
-            VStack(alignment: .leading, spacing: 2) {
+            JerseyCircle(number: readiness.jersey, size: 44, glowing: readiness.status == .atRisk)
+            VStack(alignment: .leading, spacing: 3) {
                 Text(readiness.name).font(.subheadline.bold()).foregroundStyle(.white).lineLimit(1)
                 Text(readiness.position).font(.caption).foregroundStyle(Color.textSecondary)
+                Text(readiness.recommendation).font(.system(size: 10)).foregroundStyle(Color.textSecondary.opacity(0.7)).lineLimit(1)
             }
             Spacer()
-            // Sparkline (inverted y: upward = bad)
-            SparklineView(points: readiness.deltaHistory.suffix(5).map(\.value),
-                color: readiness.trend == .worsening ? Color.statusRed : readiness.trend == .improving ? Color.statusGreen : Color.textSecondary)
-                .frame(width: 40, height: 20)
-            VStack(alignment: .trailing, spacing: 3) {
-                Text("\(Int(readiness.fatigueDegradationPct))%").font(.subheadline.bold())
-                    .foregroundStyle(readiness.status == .atRisk ? Color.statusRed : readiness.status == .caution ? Color.statusYellow : Color.statusGreen)
-                HStack(spacing: 4) { StatusBadge(status: readiness.status); TrendBadge(trend: readiness.trend) }
+            // Sparkline
+            SparklineView(
+                points: readiness.deltaHistory.suffix(5).map(\.value),
+                color: readiness.trend == .worsening ? Color.statusRed : readiness.trend == .improving ? Color.statusGreen : Color.textSecondary
+            ).frame(width: 44, height: 22)
+            VStack(alignment: .trailing, spacing: 4) {
+                Text("\(Int(readiness.fatigueDegradationPct))%")
+                    .font(.system(size: 16, weight: .bold, design: .rounded))
+                    .foregroundStyle(
+                        readiness.status == .atRisk ? Color.statusRed :
+                        readiness.status == .caution ? Color.statusYellow : Color.statusGreen
+                    )
+                HStack(spacing: 4) {
+                    StatusBadge(status: readiness.status)
+                    TrendBadge(trend: readiness.trend)
+                }
             }
         }
-        .padding(12).background(Color.cardBg).cornerRadius(12)
-    }
-}
-
-// MARK: - Card Press Style
-struct CardPressStyle: ButtonStyle {
-    func makeBody(configuration: Configuration) -> some View {
-        configuration.label
-            .scaleEffect(configuration.isPressed ? 0.97 : 1.0)
-            .animation(.easeInOut(duration: 0.15), value: configuration.isPressed)
+        .padding(14)
+        .background(Color.bgCard)
+        .cornerRadius(14)
     }
 }
 
 
-// MARK: - Athlete Detail
+// MARK: - Athlete Detail (Major Upgrade)
 struct AthleteDetailView: View {
     @Environment(DataEngine.self) private var engine
     let athleteID: UUID
     private var r: AthleteReadiness? { engine.allReadiness.first { $0.id == athleteID } }
-    @State private var chartsVisible = false
+    @State private var chartsAppeared = false
+    @State private var statsAppeared = false
 
     var body: some View {
         ScrollView {
             if let r = r {
-                VStack(spacing: 16) {
-                    // Header
-                    VStack(spacing: 8) {
-                        JerseyCircle(number: r.jersey, size: 64)
+                VStack(spacing: 18) {
+                    // Sticky Header
+                    VStack(spacing: 10) {
+                        JerseyCircle(number: r.jersey, size: 72, glowing: r.status == .atRisk)
                         Text(r.name).font(.title2.bold()).foregroundStyle(.white)
                         Text(r.position).font(.subheadline).foregroundStyle(Color.textSecondary)
-                        HStack(spacing: 12) { StatusBadge(status: r.status); TrendBadge(trend: r.trend) }
-                    }.padding(.top)
+                        HStack(spacing: 10) {
+                            StatusBadge(status: r.status)
+                            TrendBadge(trend: r.trend)
+                        }
+                    }.padding(.top, 8)
 
-                    // Recommendation
-                    HStack {
-                        Image(systemName: "lightbulb.fill").foregroundStyle(Color.brand)
-                        Text(r.recommendation).font(.callout).foregroundStyle(.white)
-                    }.padding().background(Color.cardBg).cornerRadius(12).padding(.horizontal)
+                    // Recommendation Card
+                    HStack(alignment: .top, spacing: 12) {
+                        Image(systemName: "lightbulb.fill")
+                            .font(.title3).foregroundStyle(Color.brand)
+                        Text(r.recommendation)
+                            .font(.callout).foregroundStyle(.white)
+                    }
+                    .padding(16)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .background(Color.bgCard)
+                    .overlay(
+                        HStack {
+                            Rectangle().fill(Color.brand).frame(width: 3)
+                            Spacer()
+                        }
+                    )
+                    .cornerRadius(14)
+                    .padding(.horizontal)
 
-                    // Valgus chart with fresh/fatigued markers
-                    LineChartView(data: r.valgusHistory, baselineValue: r.baselineValgus, lineColor: .brand, title: "Knee Valgus", unit: "degrees", showFreshFatigued: true)
+                    // Charts (staggered fade-in)
+                    LineChartView(data: r.valgusHistory, baselineValue: r.baselineValgus,
+                        lineColor: .brand, title: "Knee Valgus", unit: "degrees", showFreshFatigued: true)
                         .padding(.horizontal)
-                        .opacity(chartsVisible ? 1.0 : 0.0)
-                        .offset(y: chartsVisible ? 0 : 10)
-                        .animation(.easeOut(duration: 0.4).delay(0.1), value: chartsVisible)
-                    LineChartView(data: r.flexionHistory, baselineValue: 55.0, lineColor: Color.statusGreen, title: "Knee Flexion", unit: "degrees")
-                        .padding(.horizontal)
-                        .opacity(chartsVisible ? 1.0 : 0.0)
-                        .offset(y: chartsVisible ? 0 : 10)
-                        .animation(.easeOut(duration: 0.4).delay(0.2), value: chartsVisible)
-                    LineChartView(data: r.deltaHistory, baselineValue: 0, lineColor: Color.statusRed, title: "Fatigue Delta", unit: "% degradation")
-                        .padding(.horizontal)
-                        .opacity(chartsVisible ? 1.0 : 0.0)
-                        .offset(y: chartsVisible ? 0 : 10)
-                        .animation(.easeOut(duration: 0.4).delay(0.3), value: chartsVisible)
+                        .opacity(chartsAppeared ? 1 : 0)
+                        .offset(y: chartsAppeared ? 0 : 14)
+                        .animation(.easeOut(duration: 0.45).delay(0.1), value: chartsAppeared)
 
-                    // Stats grid
+                    LineChartView(data: r.flexionHistory, baselineValue: 55.0,
+                        lineColor: Color(red: 0.3, green: 0.6, blue: 1.0), title: "Knee Flexion", unit: "degrees")
+                        .padding(.horizontal)
+                        .opacity(chartsAppeared ? 1 : 0)
+                        .offset(y: chartsAppeared ? 0 : 14)
+                        .animation(.easeOut(duration: 0.45).delay(0.25), value: chartsAppeared)
+
+                    LineChartView(data: r.deltaHistory, baselineValue: 0,
+                        lineColor: Color.statusRed, title: "Fatigue Delta", unit: "% degradation")
+                        .padding(.horizontal)
+                        .opacity(chartsAppeared ? 1 : 0)
+                        .offset(y: chartsAppeared ? 0 : 14)
+                        .animation(.easeOut(duration: 0.45).delay(0.4), value: chartsAppeared)
+
+                    // Stats Grid (2x2)
                     LazyVGrid(columns: [GridItem(.flexible()), GridItem(.flexible())], spacing: 12) {
-                        StatCell(label: "Baseline Valgus", value: String(format: "%.1f°", r.baselineValgus))
-                        StatCell(label: "Latest Fatigued", value: String(format: "%.1f°", r.latestFatiguedValgus))
-                        StatCell(label: "Degradation", value: "\(Int(r.fatigueDegradationPct))%")
-                        StatCell(label: "Sessions", value: "\(r.sessionCount)")
-                    }.padding(.horizontal)
+                        StatCell(label: "Baseline Valgus", value: String(format: "%.1f°", r.baselineValgus), color: .brand)
+                        StatCell(label: "Latest Fatigued", value: String(format: "%.1f°", r.latestFatiguedValgus), color: .statusYellow)
+                        StatCell(label: "Degradation", value: "\(Int(r.fatigueDegradationPct))%",
+                            color: r.status == .atRisk ? .statusRed : r.status == .caution ? .statusYellow : .statusGreen)
+                        StatCell(label: "Sessions", value: "\(r.sessionCount)", color: .brand)
+                    }
+                    .padding(.horizontal)
+                    .opacity(statsAppeared ? 1 : 0)
+                    .animation(.easeOut(duration: 0.4).delay(0.5), value: statsAppeared)
 
-                    // Session history
-                    VStack(alignment: .leading, spacing: 8) {
+                    // Session History
+                    VStack(alignment: .leading, spacing: 10) {
                         Text("Session History").font(.headline).foregroundStyle(.white)
                         ForEach(r.allSessions.reversed()) { s in
-                            HStack {
-                                Text(s.date, style: .date).font(.caption).foregroundStyle(Color.textSecondary)
-                                Spacer()
-                                Text(s.isFresh ? "Fresh" : "Fatigued").font(.caption2.bold())
-                                    .padding(.horizontal, 6).padding(.vertical, 2)
-                                    .background(s.isFresh ? Color.statusGreen.opacity(0.2) : Color.statusYellow.opacity(0.2))
-                                    .foregroundStyle(s.isFresh ? Color.statusGreen : Color.statusYellow)
-                                    .cornerRadius(4)
-                                Text(String(format: "%.1f°", s.value)).font(.caption.bold()).foregroundStyle(.white)
-                            }
+                            SessionHistoryRow(session: s, baselineValgus: r.baselineValgus,
+                                cautionThreshold: engine.cautionThreshold, atRiskThreshold: engine.atRiskThreshold)
                         }
-                    }.padding()
+                    }
+                    .padding(16)
+                    .background(Color.bgCard)
+                    .cornerRadius(14)
+                    .padding(.horizontal)
                 }
-                .transition(.opacity)
+                .padding(.bottom, 30)
             } else {
-                Text("Athlete not found").foregroundStyle(Color.textSecondary)
+                VStack {
+                    Spacer().frame(height: 100)
+                    Text("Athlete not found").foregroundStyle(Color.textSecondary)
+                }
             }
         }
         .background(Color.bgPrimary)
         .navigationBarTitleDisplayMode(.inline)
-        .onAppear { chartsVisible = true }
+        .toolbar {
+            ToolbarItem(placement: .topBarTrailing) {
+                ShareLink(item: "LANDER Buddy — \(r?.name ?? "Athlete") Report",
+                    subject: Text("Athlete Report"),
+                    message: Text("\(r?.name ?? "") — \(Int(r?.fatigueDegradationPct ?? 0))% degradation, Status: \(r?.status.rawValue ?? "")")) {
+                    Image(systemName: "square.and.arrow.up").foregroundStyle(Color.brand)
+                }
+            }
+        }
+        .onAppear {
+            withAnimation(.easeOut(duration: 0.5).delay(0.2)) { chartsAppeared = true }
+            withAnimation(.easeOut(duration: 0.4).delay(0.4)) { statsAppeared = true }
+        }
     }
 }
 
 struct StatCell: View {
-    let label: String; let value: String
+    let label: String; let value: String; var color: Color = .white
     var body: some View {
-        VStack(spacing: 4) {
+        VStack(spacing: 6) {
             Text(label).font(.caption2).foregroundStyle(Color.textSecondary)
-            Text(value).font(.title3.bold()).foregroundStyle(.white)
-        }.frame(maxWidth: .infinity).padding(12).background(Color.cardBg).cornerRadius(10)
+            Text(value).font(.title3.bold()).foregroundStyle(color)
+        }
+        .frame(maxWidth: .infinity).padding(14)
+        .background(Color.bgCard).cornerRadius(12)
+    }
+}
+
+struct SessionHistoryRow: View {
+    let session: DataPoint
+    let baselineValgus: Double
+    let cautionThreshold: Double
+    let atRiskThreshold: Double
+
+    private var valueColor: Color {
+        guard !session.isFresh, baselineValgus > 0 else { return .white }
+        let delta = ((session.value - baselineValgus) / baselineValgus) * 100
+        if delta > atRiskThreshold { return Color.statusRed }
+        else if delta > cautionThreshold { return Color.statusYellow }
+        else { return Color.statusGreen }
+    }
+
+    var body: some View {
+        HStack {
+            Text(session.date, format: .dateTime.month(.abbreviated).day())
+                .font(.caption).foregroundStyle(Color.textSecondary)
+            Spacer()
+            Text(session.isFresh ? "Fresh" : "Fatigued").font(.system(size: 10, weight: .bold))
+                .padding(.horizontal, 7).padding(.vertical, 3)
+                .background(session.isFresh ? Color.statusGreen.opacity(0.15) : Color.statusYellow.opacity(0.15))
+                .foregroundStyle(session.isFresh ? Color.statusGreen : Color.statusYellow)
+                .clipShape(Capsule())
+            Text(String(format: "%.1f°", session.value))
+                .font(.caption.bold()).foregroundStyle(valueColor)
+                .frame(width: 44, alignment: .trailing)
+        }
     }
 }
 
 
-// MARK: - Camera Integration (AVFoundation)
+// MARK: - Camera Integration
 struct CameraView: UIViewControllerRepresentable {
     let sourceType: UIImagePickerController.SourceType
     let onComplete: (URL?) -> Void
@@ -796,13 +1261,11 @@ struct CameraView: UIViewControllerRepresentable {
         return picker
     }
     func updateUIViewController(_ uiViewController: UIImagePickerController, context: Context) {}
-
     func makeCoordinator() -> Coordinator { Coordinator(onComplete: onComplete) }
 
     class Coordinator: NSObject, UIImagePickerControllerDelegate, UINavigationControllerDelegate {
         let onComplete: (URL?) -> Void
         init(onComplete: @escaping (URL?) -> Void) { self.onComplete = onComplete }
-
         func imagePickerController(_ picker: UIImagePickerController, didFinishPickingMediaWithInfo info: [UIImagePickerController.InfoKey: Any]) {
             let url = info[.mediaURL] as? URL
             picker.dismiss(animated: true) { self.onComplete(url) }
@@ -824,7 +1287,7 @@ func generateThumbnail(from url: URL) -> UIImage? {
 }
 
 
-// MARK: - Capture Flow
+// MARK: - Capture Flow (Polished 4-Step)
 struct CaptureFlowView: View {
     @Environment(DataEngine.self) private var engine
     @State private var step = 1
@@ -833,7 +1296,6 @@ struct CaptureFlowView: View {
     @State private var selectedAthleteIDs: Set<UUID> = []
     @State private var captureItems: [CaptureItem] = []
     @State private var consentGiven = false
-    @State private var analyzing = false
     @State private var showCameraFor: CameraSheetItem? = nil
     @State private var cameraSourceType: UIImagePickerController.SourceType = .camera
     @State private var showVideoActionSheet = false
@@ -845,21 +1307,39 @@ struct CaptureFlowView: View {
             ZStack {
                 Color.bgPrimary.ignoresSafeArea()
                 VStack(spacing: 0) {
-                    // Progress bar
-                    HStack(spacing: 4) {
+                    // Animated progress bar
+                    HStack(spacing: 5) {
                         ForEach(1...4, id: \.self) { s in
-                            Capsule().fill(s <= step ? Color.brand : Color.cardBg).frame(height: 4)
+                            Capsule()
+                                .fill(s <= step ? Color.brand : Color.bgCardLight)
+                                .frame(height: 4)
+                                .animation(.spring(response: 0.4, dampingFraction: 0.75), value: step)
                         }
-                    }.padding()
+                    }.padding(.horizontal).padding(.top, 8)
+
+                    // Step label
+                    HStack {
+                        Text(stepTitle).font(.caption.bold()).foregroundStyle(Color.brand)
+                        Spacer()
+                        Text("Step \(step) of 4").font(.caption).foregroundStyle(Color.textSecondary)
+                    }.padding(.horizontal).padding(.top, 8)
 
                     ScrollView {
                         VStack(spacing: 20) {
-                            if step == 1 { captureStep1.transition(.asymmetric(insertion: .move(edge: .trailing).combined(with: .opacity), removal: .move(edge: .leading).combined(with: .opacity))) }
-                            else if step == 2 { captureStep2.transition(.asymmetric(insertion: .move(edge: .trailing).combined(with: .opacity), removal: .move(edge: .leading).combined(with: .opacity))) }
-                            else if step == 3 { captureStep3.transition(.asymmetric(insertion: .move(edge: .trailing).combined(with: .opacity), removal: .move(edge: .leading).combined(with: .opacity))) }
-                            else { captureStep4.transition(.asymmetric(insertion: .move(edge: .trailing).combined(with: .opacity), removal: .move(edge: .leading).combined(with: .opacity))) }
+                            Group {
+                                switch step {
+                                case 1: captureStep1
+                                case 2: captureStep2
+                                case 3: captureStep3
+                                default: captureStep4
+                                }
+                            }
+                            .transition(.asymmetric(
+                                insertion: .move(edge: .trailing).combined(with: .opacity),
+                                removal: .move(edge: .leading).combined(with: .opacity)
+                            ))
                         }.padding()
-                        .animation(.easeInOut(duration: 0.3), value: step)
+                        .animation(.spring(response: 0.4, dampingFraction: 0.75), value: step)
                     }
                 }
             }
@@ -887,6 +1367,15 @@ struct CaptureFlowView: View {
         }
     }
 
+    private var stepTitle: String {
+        switch step {
+        case 1: return "SESSION DETAILS"
+        case 2: return "VIDEO UPLOAD"
+        case 3: return "PROCESSING"
+        default: return "RESULTS"
+        }
+    }
+
     private func checkCameraAndRecord(for id: UUID) {
         let status = AVCaptureDevice.authorizationStatus(for: .video)
         switch status {
@@ -906,87 +1395,110 @@ struct CaptureFlowView: View {
     }
 
 
+    // Step 1: Date + Type + Athlete Selection
     private var captureStep1: some View {
-        VStack(alignment: .leading, spacing: 16) {
-            Text("Session Details").font(.title3.bold()).foregroundStyle(.white)
-            DatePicker("Date", selection: $selectedDate, displayedComponents: .date).tint(.brand)
-            Picker("Type", selection: $isFresh) {
-                Text("Fresh").tag(true)
-                Text("Fatigued").tag(false)
-            }.pickerStyle(.segmented).tint(.brand)
+        VStack(alignment: .leading, spacing: 18) {
+            VStack(alignment: .leading, spacing: 10) {
+                Text("Session Date").font(.subheadline.bold()).foregroundStyle(.white)
+                DatePicker("", selection: $selectedDate, displayedComponents: .date)
+                    .labelsHidden().tint(.brand)
+                    .padding(12).background(Color.bgCard).cornerRadius(12)
+            }
 
-            Text("Select Athletes").font(.headline).foregroundStyle(.white).padding(.top)
-            ForEach(engine.athletes) { a in
-                Button {
-                    if selectedAthleteIDs.contains(a.id) { selectedAthleteIDs.remove(a.id) }
-                    else { selectedAthleteIDs.insert(a.id) }
-                } label: {
-                    HStack {
-                        JerseyCircle(number: a.jersey, size: 36)
-                        Text(a.name).foregroundStyle(.white).lineLimit(1)
-                        Spacer()
-                        if selectedAthleteIDs.contains(a.id) {
-                            Image(systemName: "checkmark.circle.fill").foregroundStyle(Color.brand)
-                        } else {
-                            Image(systemName: "circle").foregroundStyle(Color.textSecondary)
-                        }
-                    }.padding(10).background(Color.cardBg).cornerRadius(10)
+            VStack(alignment: .leading, spacing: 10) {
+                Text("Condition").font(.subheadline.bold()).foregroundStyle(.white)
+                HStack(spacing: 12) {
+                    ConditionButton(title: "Fresh", selected: isFresh) { isFresh = true }
+                    ConditionButton(title: "Fatigued", selected: !isFresh) { isFresh = false }
                 }
             }
 
+            VStack(alignment: .leading, spacing: 10) {
+                Text("Select Athletes").font(.subheadline.bold()).foregroundStyle(.white)
+                ForEach(engine.athletes) { a in
+                    Button {
+                        withAnimation(.spring(response: 0.3, dampingFraction: 0.7)) {
+                            if selectedAthleteIDs.contains(a.id) { selectedAthleteIDs.remove(a.id) }
+                            else { selectedAthleteIDs.insert(a.id) }
+                        }
+                    } label: {
+                        HStack(spacing: 12) {
+                            JerseyCircle(number: a.jersey, size: 36)
+                            Text(a.name).foregroundStyle(.white).lineLimit(1)
+                            Spacer()
+                            ZStack {
+                                Circle().stroke(selectedAthleteIDs.contains(a.id) ? Color.brand : Color.textSecondary.opacity(0.4), lineWidth: 2)
+                                    .frame(width: 24, height: 24)
+                                if selectedAthleteIDs.contains(a.id) {
+                                    Circle().fill(Color.brand).frame(width: 24, height: 24)
+                                    Image(systemName: "checkmark").font(.system(size: 11, weight: .bold)).foregroundStyle(.black)
+                                }
+                            }
+                        }.padding(12).background(Color.bgCard).cornerRadius(12)
+                    }
+                }
+            }
+
+            Spacer().frame(height: 8)
             Button {
                 captureItems = selectedAthleteIDs.compactMap { id in
                     guard let a = engine.athletes.first(where: { $0.id == id }) else { return nil }
                     return CaptureItem(id: a.id, name: a.name)
                 }
-                withAnimation(.easeInOut(duration: 0.3)) { step = 2 }
+                withAnimation(.spring(response: 0.4, dampingFraction: 0.75)) { step = 2 }
             } label: {
-                Text("Next →").frame(maxWidth: .infinity).padding()
-                    .background(selectedAthleteIDs.isEmpty ? Color.cardBg : Color.brand)
-                    .foregroundStyle(selectedAthleteIDs.isEmpty ? Color.textSecondary : .black)
-                    .cornerRadius(12).bold()
+                HStack {
+                    Text("Next").font(.headline)
+                    Image(systemName: "arrow.right")
+                }
+                .frame(maxWidth: .infinity).padding(15)
+                .background(selectedAthleteIDs.isEmpty ? Color.bgCardLight : Color.brand)
+                .foregroundStyle(selectedAthleteIDs.isEmpty ? Color.textSecondary : .black)
+                .cornerRadius(14)
             }.disabled(selectedAthleteIDs.isEmpty)
         }
     }
 
-
+    // Step 2: Video Upload per athlete
     private var captureStep2: some View {
         VStack(alignment: .leading, spacing: 16) {
-            Text("Upload Videos").font(.title3.bold()).foregroundStyle(.white)
-            Text("Record or upload a landing video for each athlete.").font(.caption).foregroundStyle(Color.textSecondary)
+            Text("Record or select a landing video for each athlete.")
+                .font(.caption).foregroundStyle(Color.textSecondary)
 
             ForEach($captureItems) { $item in
-                HStack {
-                    // Thumbnail if available
+                HStack(spacing: 12) {
                     if let thumb = item.thumbnail {
-                        Image(uiImage: thumb)
-                            .resizable().scaledToFill()
-                            .frame(width: 40, height: 40)
-                            .clipShape(RoundedRectangle(cornerRadius: 6))
+                        Image(uiImage: thumb).resizable().scaledToFill()
+                            .frame(width: 42, height: 42)
+                            .clipShape(RoundedRectangle(cornerRadius: 8))
                     }
                     Text(item.name).foregroundStyle(.white).lineLimit(1)
                     Spacer()
                     if item.videoAttached {
-                        Image(systemName: "checkmark.circle.fill").foregroundStyle(Color.statusGreen).font(.title3)
+                        Image(systemName: "checkmark.circle.fill")
+                            .font(.title2).foregroundStyle(Color.statusGreen)
                     } else {
                         Button {
                             actionSheetItemID = item.id
                             showVideoActionSheet = true
                         } label: {
                             HStack(spacing: 4) {
-                                Image(systemName: "video.badge.plus")
-                                Text("Add Video")
-                            }.font(.caption.bold()).padding(.horizontal, 10).padding(.vertical, 6)
-                            .background(Color.brand.opacity(0.2)).foregroundStyle(Color.brand).cornerRadius(8)
+                                Image(systemName: "video.badge.plus").font(.caption)
+                                Text("Add Video").font(.caption.bold())
+                            }
+                            .padding(.horizontal, 12).padding(.vertical, 8)
+                            .background(Color.brand.opacity(0.15))
+                            .foregroundStyle(Color.brand)
+                            .cornerRadius(8)
                         }
                     }
-                }.padding(12).background(Color.cardBg).cornerRadius(10)
+                }.padding(12).background(Color.bgCard).cornerRadius(12)
             }
             .confirmationDialog("Add Video", isPresented: $showVideoActionSheet, titleVisibility: .visible) {
                 Button("Record with Camera") {
                     if let id = actionSheetItemID { checkCameraAndRecord(for: id) }
                 }
-                Button("Upload from Library") {
+                Button("Choose from Library") {
                     if let id = actionSheetItemID {
                         cameraSourceType = .photoLibrary
                         showCameraFor = CameraSheetItem(id: id)
@@ -995,184 +1507,302 @@ struct CaptureFlowView: View {
                 Button("Cancel", role: .cancel) {}
             }
 
-            // Consent
-            Toggle(isOn: $consentGiven) {
+            // Consent toggle
+            HStack(spacing: 12) {
+                Toggle("", isOn: $consentGiven).labelsHidden().tint(Color.brand)
                 VStack(alignment: .leading, spacing: 2) {
                     Text("Consent Confirmed").font(.subheadline.bold()).foregroundStyle(.white)
-                    Text("I confirm consent has been obtained from all athletes in this recording.")
+                    Text("All athletes have provided consent for video analysis.")
                         .font(.caption2).foregroundStyle(Color.textSecondary)
                 }
-            }.tint(Color.brand).padding(.top)
+            }.padding(.top, 8)
 
             let allAttached = captureItems.allSatisfy(\.videoAttached)
-            Button {
-                withAnimation(.easeInOut(duration: 0.3)) { step = 3 }; startAnalysis()
-            } label: {
-                Text("Analyze Landing →").frame(maxWidth: .infinity).padding()
-                    .background(allAttached && consentGiven ? Color.brand : Color.cardBg)
+            HStack(spacing: 12) {
+                Button {
+                    withAnimation(.spring(response: 0.4, dampingFraction: 0.75)) { step = 1 }
+                } label: {
+                    Text("Back").font(.subheadline.bold())
+                        .padding(14).frame(maxWidth: .infinity)
+                        .background(Color.bgCardLight).foregroundStyle(.white).cornerRadius(14)
+                }
+                Button {
+                    withAnimation(.spring(response: 0.4, dampingFraction: 0.75)) { step = 3 }
+                    startAnalysis()
+                } label: {
+                    HStack {
+                        Text("Analyze").font(.headline)
+                        Image(systemName: "wand.and.stars")
+                    }
+                    .frame(maxWidth: .infinity).padding(15)
+                    .background(allAttached && consentGiven ? Color.brand : Color.bgCardLight)
                     .foregroundStyle(allAttached && consentGiven ? .black : Color.textSecondary)
-                    .cornerRadius(12).bold()
-            }.disabled(!allAttached || !consentGiven)
-
-            Button("← Back") { withAnimation(.easeInOut(duration: 0.3)) { step = 1 } }.font(.caption).foregroundStyle(Color.textSecondary)
+                    .cornerRadius(14)
+                }.disabled(!allAttached || !consentGiven)
+            }
         }
     }
 
 
+    // Step 3: Processing with animated checkmarks
     private var captureStep3: some View {
-        VStack(spacing: 20) {
-            Text("Analyzing...").font(.title3.bold()).foregroundStyle(.white)
-            ForEach(captureItems) { item in
-                HStack {
-                    Text(item.name).foregroundStyle(.white)
-                    Spacer()
-                    if item.done {
-                        Image(systemName: "checkmark.circle.fill")
-                            .foregroundStyle(Color.statusGreen)
-                            .scaleEffect(item.done ? 1.0 : 0.0)
-                            .animation(.spring(response: 0.3, dampingFraction: 0.6), value: item.done)
-                    } else if item.processing {
-                        ProgressView().tint(Color.brand)
-                    } else {
-                        Circle().fill(Color.cardBg).frame(width: 20, height: 20)
-                    }
-                }.padding(12).background(Color.cardBg).cornerRadius(10)
-            }
-            if captureItems.allSatisfy(\.done) {
-                Button { withAnimation(.easeInOut(duration: 0.3)) { step = 4 } } label: {
-                    Text("View Results →").frame(maxWidth: .infinity).padding()
-                        .background(Color.brand).foregroundStyle(.black).cornerRadius(12).bold()
+        VStack(spacing: 18) {
+            Image(systemName: "brain.head.profile")
+                .font(.system(size: 36)).foregroundStyle(Color.brand)
+                .shadow(color: Color.brandGlow, radius: 8)
+            Text("Analyzing Landing Mechanics")
+                .font(.headline).foregroundStyle(.white)
+            Text("Running pose estimation and biomechanics analysis...")
+                .font(.caption).foregroundStyle(Color.textSecondary)
+
+            VStack(spacing: 10) {
+                ForEach(captureItems) { item in
+                    HStack(spacing: 12) {
+                        Text(item.name).foregroundStyle(.white).lineLimit(1)
+                        Spacer()
+                        if item.done {
+                            Image(systemName: "checkmark.circle.fill")
+                                .font(.title3).foregroundStyle(Color.statusGreen)
+                                .scaleEffect(item.done ? 1.0 : 0.3)
+                                .animation(.spring(response: 0.35, dampingFraction: 0.55), value: item.done)
+                        } else if item.processing {
+                            ProgressView().tint(Color.brand).scaleEffect(0.9)
+                        } else {
+                            Circle().fill(Color.bgCardLight).frame(width: 22, height: 22)
+                        }
+                    }.padding(14).background(Color.bgCard).cornerRadius(12)
                 }
             }
+
+            if captureItems.allSatisfy(\.done) {
+                Button {
+                    withAnimation(.spring(response: 0.4, dampingFraction: 0.75)) { step = 4 }
+                } label: {
+                    HStack {
+                        Text("View Results").font(.headline)
+                        Image(systemName: "arrow.right")
+                    }
+                    .frame(maxWidth: .infinity).padding(15)
+                    .background(Color.brand).foregroundStyle(.black).cornerRadius(14)
+                }
+                .transition(.scale.combined(with: .opacity))
+            }
         }
     }
 
+    // Step 4: Results
     private var captureStep4: some View {
         VStack(alignment: .leading, spacing: 16) {
-            Text("Results").font(.title3.bold()).foregroundStyle(.white)
-            Text(isFresh ? "Fresh session recorded" : "Fatigued session — showing delta vs baseline")
+            HStack {
+                Image(systemName: "checkmark.seal.fill").font(.title2).foregroundStyle(Color.statusGreen)
+                Text("Analysis Complete").font(.headline).foregroundStyle(.white)
+            }
+            Text(isFresh ? "Fresh baseline session recorded successfully." : "Fatigued session — showing delta vs baseline.")
                 .font(.caption).foregroundStyle(Color.textSecondary)
 
             ForEach(captureItems) { item in
                 if let m = item.resultMetrics {
-                    VStack(alignment: .leading, spacing: 6) {
+                    VStack(alignment: .leading, spacing: 10) {
                         Text(item.name).font(.subheadline.bold()).foregroundStyle(.white)
-                        HStack(spacing: 16) {
-                            VStack { Text("Valgus").font(.caption2).foregroundStyle(Color.textSecondary); Text(String(format: "%.1f°", m.valgusAngle)).foregroundStyle(.white).bold() }
-                            VStack { Text("Flexion").font(.caption2).foregroundStyle(Color.textSecondary); Text(String(format: "%.1f°", m.kneeFlexionAngle)).foregroundStyle(.white).bold() }
-                            VStack { Text("Asym").font(.caption2).foregroundStyle(Color.textSecondary); Text(String(format: "%.0f%%", m.asymmetry)).foregroundStyle(.white).bold() }
+                        HStack(spacing: 14) {
+                            MetricPill(label: "Valgus", value: String(format: "%.1f°", m.valgusAngle), color: .brand)
+                            MetricPill(label: "Flexion", value: String(format: "%.1f°", m.kneeFlexionAngle), color: Color(red: 0.3, green: 0.6, blue: 1.0))
+                            MetricPill(label: "Asym", value: String(format: "%.0f%%", m.asymmetry), color: .statusYellow)
                             if !isFresh, let a = engine.athletes.first(where: { $0.id == item.id }) {
                                 let bl = a.sessions.filter(\.isFresh).map(\.value).reduce(0, +) / max(1, Double(a.sessions.filter(\.isFresh).count))
                                 let delta = bl > 0 ? ((m.valgusAngle - bl) / bl) * 100 : 0
-                                VStack { Text("Delta").font(.caption2).foregroundStyle(Color.textSecondary); Text("+\(Int(delta))%").foregroundStyle(delta > 18 ? Color.statusRed : delta > 10 ? Color.statusYellow : Color.statusGreen).bold() }
+                                MetricPill(label: "Delta", value: "+\(Int(delta))%",
+                                    color: delta > 18 ? .statusRed : delta > 10 ? .statusYellow : .statusGreen)
                             }
                         }
-                    }.padding().background(Color.cardBg).cornerRadius(10)
+                    }.padding(14).background(Color.bgCard).cornerRadius(12)
                 }
             }
 
             Button {
-                withAnimation(.easeInOut(duration: 0.3)) { step = 1 }; captureItems = []; selectedAthleteIDs = []; consentGiven = false
+                withAnimation(.spring(response: 0.4, dampingFraction: 0.75)) { step = 1 }
+                captureItems = []; selectedAthleteIDs = []; consentGiven = false
             } label: {
-                Text("Done").frame(maxWidth: .infinity).padding()
-                    .background(Color.brand).foregroundStyle(.black).cornerRadius(12).bold()
+                Text("Done").font(.headline)
+                    .frame(maxWidth: .infinity).padding(15)
+                    .background(Color.brand).foregroundStyle(.black).cornerRadius(14)
             }
         }
     }
 
+
     private func startAnalysis() {
         for i in captureItems.indices {
-            DispatchQueue.main.asyncAfter(deadline: .now() + Double(i) * 0.8) {
-                captureItems[i].processing = true
+            DispatchQueue.main.asyncAfter(deadline: .now() + Double(i) * 0.9) {
+                withAnimation(.spring(response: 0.3, dampingFraction: 0.7)) {
+                    captureItems[i].processing = true
+                }
             }
-            DispatchQueue.main.asyncAfter(deadline: .now() + Double(i) * 0.8 + 1.2) {
-                captureItems[i].processing = false
-                captureItems[i].done = true
+            DispatchQueue.main.asyncAfter(deadline: .now() + Double(i) * 0.9 + 1.4) {
+                withAnimation(.spring(response: 0.35, dampingFraction: 0.6)) {
+                    captureItems[i].processing = false
+                    captureItems[i].done = true
+                }
                 let valgus = Double.random(in: 5.5...10.5)
                 captureItems[i].resultMetrics = ModelMetrics(
                     valgusAngle: valgus, kneeFlexionAngle: Double.random(in: 48...62),
-                    trunkLean: Double.random(in: 3...12), asymmetry: Double.random(in: 2...15), lessScore: Int.random(in: 55...95))
+                    trunkLean: Double.random(in: 3...12), asymmetry: Double.random(in: 2...15),
+                    lessScore: Int.random(in: 55...95)
+                )
+                // Persist session data
                 if let idx = engine.athletes.firstIndex(where: { $0.id == captureItems[i].id }) {
-                    engine.athletes[idx].sessions.append(DataPoint(date: selectedDate, value: valgus, isFresh: isFresh))
+                    engine.athletes[idx].sessions.append(
+                        DataPoint(date: selectedDate, value: valgus, isFresh: isFresh)
+                    )
                     engine.save()
+                    // Check for At Risk notification
+                    if !isFresh {
+                        let r = engine.readiness(for: engine.athletes[idx])
+                        if r.status == .atRisk {
+                            engine.scheduleAtRiskNotification(name: r.name, degradation: Int(r.fatigueDegradationPct))
+                        }
+                    }
                 }
             }
         }
     }
 }
 
-
-// MARK: - Camera Sheet Item (replaces @retroactive Identifiable on UUID)
-struct CameraSheetItem: Identifiable {
-    let id: UUID
+// MARK: - Capture Helpers
+struct ConditionButton: View {
+    let title: String; let selected: Bool; let action: () -> Void
+    var body: some View {
+        Button(action: action) {
+            Text(title).font(.subheadline.bold())
+                .frame(maxWidth: .infinity).padding(14)
+                .background(selected ? Color.brand.opacity(0.15) : Color.bgCard)
+                .foregroundStyle(selected ? Color.brand : Color.textSecondary)
+                .overlay(
+                    RoundedRectangle(cornerRadius: 12)
+                        .stroke(selected ? Color.brand : Color.bgCardLight, lineWidth: selected ? 2 : 1)
+                )
+                .cornerRadius(12)
+        }
+    }
 }
 
-// MARK: - Roster (with status badges)
+struct MetricPill: View {
+    let label: String; let value: String; let color: Color
+    var body: some View {
+        VStack(spacing: 3) {
+            Text(label).font(.system(size: 9)).foregroundStyle(Color.textSecondary)
+            Text(value).font(.caption.bold()).foregroundStyle(color)
+        }
+    }
+}
+
+
+// MARK: - Roster (with status badges and navigation)
 struct RosterView: View {
     @Environment(DataEngine.self) private var engine
     @State private var showingAdd = false
     @State private var newName = ""
     @State private var newJersey = ""
     @State private var newPosition = ""
+    @State private var appeared = false
 
     var body: some View {
         NavigationStack {
             ZStack {
                 Color.bgPrimary.ignoresSafeArea()
                 if engine.athletes.isEmpty {
-                    VStack(spacing: 12) {
-                        Image(systemName: "person.3").font(.largeTitle).foregroundStyle(Color.textSecondary)
-                        Text("No athletes yet").foregroundStyle(Color.textSecondary)
-                        Text("Tap + to add your first athlete").font(.caption).foregroundStyle(Color.textSecondary)
+                    VStack(spacing: 14) {
+                        Image(systemName: "figure.run.circle")
+                            .font(.system(size: 52)).foregroundStyle(Color.textSecondary.opacity(0.5))
+                        Text("No athletes yet").font(.headline).foregroundStyle(Color.textSecondary)
+                        Text("Tap + to add your first athlete").font(.caption).foregroundStyle(Color.textSecondary.opacity(0.7))
                     }
                 } else {
-                    List {
-                        ForEach(engine.athletes) { a in
-                            let r = engine.readiness(for: a)
-                            NavigationLink(value: a.id) {
-                                HStack(spacing: 12) {
-                                    JerseyCircle(number: a.jersey, size: 40)
-                                    VStack(alignment: .leading) {
-                                        Text(a.name).font(.subheadline.bold()).foregroundStyle(.white).lineLimit(1)
-                                        Text(a.position).font(.caption).foregroundStyle(Color.textSecondary)
+                    ScrollView {
+                        VStack(spacing: 10) {
+                            ForEach(engine.athletes) { a in
+                                let r = engine.readiness(for: a)
+                                NavigationLink(value: a.id) {
+                                    HStack(spacing: 12) {
+                                        JerseyCircle(number: a.jersey, size: 42, glowing: r.status == .atRisk)
+                                        VStack(alignment: .leading, spacing: 2) {
+                                            Text(a.name).font(.subheadline.bold()).foregroundStyle(.white).lineLimit(1)
+                                            Text(a.position).font(.caption).foregroundStyle(Color.textSecondary)
+                                        }
+                                        Spacer()
+                                        StatusBadge(status: r.status)
+                                        Image(systemName: "chevron.right")
+                                            .font(.caption).foregroundStyle(Color.textSecondary.opacity(0.5))
                                     }
-                                    Spacer()
-                                    StatusBadge(status: r.status)
+                                    .padding(14).background(Color.bgCard).cornerRadius(14)
                                 }
-                            }.listRowBackground(Color.cardBg)
+                                .buttonStyle(CardPressStyle())
+                                .contextMenu {
+                                    Button(role: .destructive) {
+                                        withAnimation(.spring(response: 0.3, dampingFraction: 0.7)) {
+                                            engine.removeAthlete(a.id)
+                                        }
+                                    } label: { Label("Delete", systemImage: "trash") }
+                                }
+                            }
                         }
-                        .onDelete { idxs in
-                            for i in idxs { engine.removeAthlete(engine.athletes[i].id) }
-                        }
+                        .padding(.horizontal).padding(.top, 8)
+                        .opacity(appeared ? 1 : 0)
+                        .offset(y: appeared ? 0 : 10)
                     }
-                    .scrollContentBackground(.hidden)
-                    .listStyle(.plain)
                 }
             }
             .navigationTitle("Roster")
             .navigationDestination(for: UUID.self) { id in AthleteDetailView(athleteID: id) }
             .toolbar {
                 ToolbarItem(placement: .topBarTrailing) {
-                    Button { showingAdd = true } label: { Image(systemName: "plus.circle.fill").foregroundStyle(Color.brand) }
+                    Button { showingAdd = true } label: {
+                        Image(systemName: "plus.circle.fill")
+                            .font(.title3).foregroundStyle(Color.brand)
+                    }
                 }
             }
             .sheet(isPresented: $showingAdd) {
-                NavigationStack {
-                    Form {
-                        TextField("Name", text: $newName)
-                        TextField("Jersey #", text: $newJersey).keyboardType(.numberPad)
-                        TextField("Position", text: $newPosition)
-                    }
-                    .navigationTitle("Add Athlete")
-                    .toolbar {
-                        ToolbarItem(placement: .cancellationAction) { Button("Cancel") { showingAdd = false } }
-                        ToolbarItem(placement: .confirmationAction) {
-                            Button("Add") {
-                                engine.addAthlete(name: newName, jersey: Int(newJersey) ?? 0, position: newPosition)
-                                newName = ""; newJersey = ""; newPosition = ""; showingAdd = false
-                            }.disabled(newName.isEmpty)
-                        }
-                    }
+                AddAthleteSheet(newName: $newName, newJersey: $newJersey, newPosition: $newPosition) {
+                    engine.addAthlete(name: newName, jersey: Int(newJersey) ?? 0, position: newPosition)
+                    newName = ""; newJersey = ""; newPosition = ""; showingAdd = false
+                } onCancel: { showingAdd = false }
+            }
+            .onAppear {
+                withAnimation(.easeOut(duration: 0.4)) { appeared = true }
+            }
+        }
+    }
+}
+
+struct AddAthleteSheet: View {
+    @Binding var newName: String
+    @Binding var newJersey: String
+    @Binding var newPosition: String
+    let onAdd: () -> Void
+    let onCancel: () -> Void
+
+    var body: some View {
+        NavigationStack {
+            ZStack {
+                Color.bgPrimary.ignoresSafeArea()
+                VStack(spacing: 20) {
+                    FloatingTextField(label: "Name", placeholder: "e.g. Alex Morgan", text: $newName)
+                    FloatingTextField(label: "Jersey #", placeholder: "e.g. 13", text: $newJersey)
+                    FloatingTextField(label: "Position", placeholder: "e.g. Forward", text: $newPosition)
+                    Spacer()
+                }.padding(24).padding(.top, 8)
+            }
+            .navigationTitle("Add Athlete")
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar {
+                ToolbarItem(placement: .cancellationAction) {
+                    Button("Cancel") { onCancel() }.foregroundStyle(Color.textSecondary)
+                }
+                ToolbarItem(placement: .confirmationAction) {
+                    Button("Add") { onAdd() }
+                        .foregroundStyle(newName.isEmpty ? Color.textSecondary : Color.brand)
+                        .disabled(newName.isEmpty)
                 }
             }
         }
@@ -1180,18 +1810,23 @@ struct RosterView: View {
 }
 
 
-// MARK: - History
+// MARK: - History (Grouped by Date)
 struct HistoryView: View {
     @Environment(DataEngine.self) private var engine
-    @State private var selectedSessionSheet: SessionSheetID? = nil
+    @State private var selectedSession: SessionSheetID? = nil
+    @State private var appeared = false
 
     private var groupedSessions: [(date: Date, isFresh: Bool, count: Int)] {
         var result: [(Date, Bool, Int)] = []
+        var seen: Set<String> = []
         for athlete in engine.athletes {
             for s in athlete.sessions {
-                let key = "\(s.date.timeIntervalSince1970)-\(s.isFresh)"
-                if !result.contains(where: { "\($0.0.timeIntervalSince1970)-\($0.1)" == key }) {
-                    let count = engine.athletes.filter { a in a.sessions.contains { $0.date == s.date && $0.isFresh == s.isFresh } }.count
+                let key = "\(Int(s.date.timeIntervalSince1970 / 86400))-\(s.isFresh)"
+                if !seen.contains(key) {
+                    seen.insert(key)
+                    let count = engine.athletes.filter { a in
+                        a.sessions.contains { abs($0.date.timeIntervalSince(s.date)) < 86400 && $0.isFresh == s.isFresh }
+                    }.count
                     result.append((s.date, s.isFresh, count))
                 }
             }
@@ -1204,49 +1839,60 @@ struct HistoryView: View {
             ZStack {
                 Color.bgPrimary.ignoresSafeArea()
                 if groupedSessions.isEmpty {
-                    VStack(spacing: 12) {
-                        Image(systemName: "clock").font(.largeTitle).foregroundStyle(Color.textSecondary)
-                        Text("No sessions yet").foregroundStyle(Color.textSecondary)
+                    VStack(spacing: 14) {
+                        Image(systemName: "clock.badge.questionmark")
+                            .font(.system(size: 48)).foregroundStyle(Color.textSecondary.opacity(0.5))
+                        Text("No sessions yet").font(.headline).foregroundStyle(Color.textSecondary)
+                        Text("Capture a session to see history here").font(.caption).foregroundStyle(Color.textSecondary.opacity(0.7))
                     }
                 } else {
-                    List {
-                        ForEach(groupedSessions, id: \.date) { session in
-                            Button {
-                                selectedSessionSheet = SessionSheetID(date: session.date, isFresh: session.isFresh)
-                            } label: {
-                                HStack {
-                                    VStack(alignment: .leading, spacing: 3) {
-                                        Text(session.date, style: .date).font(.subheadline.bold()).foregroundStyle(.white)
-                                        Text("\(session.count) athletes").font(.caption).foregroundStyle(Color.textSecondary)
-                                    }
-                                    Spacer()
-                                    Text(session.isFresh ? "Fresh" : "Fatigued").font(.caption2.bold())
-                                        .padding(.horizontal, 8).padding(.vertical, 3)
-                                        .background(session.isFresh ? Color.statusGreen.opacity(0.2) : Color.statusYellow.opacity(0.2))
-                                        .foregroundStyle(session.isFresh ? Color.statusGreen : Color.statusYellow)
-                                        .cornerRadius(5)
-                                }
-                            }.listRowBackground(Color.cardBg)
+                    ScrollView {
+                        VStack(spacing: 8) {
+                            ForEach(Array(groupedSessions.enumerated()), id: \.offset) { idx, session in
+                                Button {
+                                    selectedSession = SessionSheetID(date: session.date, isFresh: session.isFresh)
+                                } label: {
+                                    HStack(spacing: 12) {
+                                        VStack(alignment: .leading, spacing: 3) {
+                                            Text(session.date, format: .dateTime.weekday(.wide).month(.abbreviated).day())
+                                                .font(.subheadline.bold()).foregroundStyle(.white)
+                                            Text("\(session.count) athlete\(session.count > 1 ? "s" : "")")
+                                                .font(.caption).foregroundStyle(Color.textSecondary)
+                                        }
+                                        Spacer()
+                                        Text(session.isFresh ? "Fresh" : "Fatigued")
+                                            .font(.system(size: 10, weight: .bold))
+                                            .padding(.horizontal, 8).padding(.vertical, 4)
+                                            .background(session.isFresh ? Color.statusGreen.opacity(0.15) : Color.statusYellow.opacity(0.15))
+                                            .foregroundStyle(session.isFresh ? Color.statusGreen : Color.statusYellow)
+                                            .clipShape(Capsule())
+                                        Image(systemName: "chevron.right")
+                                            .font(.caption2).foregroundStyle(Color.textSecondary.opacity(0.4))
+                                    }.padding(14).background(Color.bgCard).cornerRadius(12)
+                                }.buttonStyle(CardPressStyle())
+                            }
                         }
+                        .padding(.horizontal).padding(.top, 8)
+                        .opacity(appeared ? 1 : 0)
                     }
-                    .scrollContentBackground(.hidden).listStyle(.plain)
                 }
             }
             .navigationTitle("History")
-            .sheet(item: $selectedSessionSheet) { item in
+            .sheet(item: $selectedSession) { item in
                 SessionDetailSheet(date: item.date, isFresh: item.isFresh)
             }
+            .onAppear { withAnimation(.easeOut(duration: 0.4)) { appeared = true } }
         }
     }
 }
 
 struct SessionSheetID: Identifiable {
     let date: Date; let isFresh: Bool
-    var id: String { "\(date.timeIntervalSince1970)-\(isFresh)" }
+    var id: String { "\(Int(date.timeIntervalSince1970 / 86400))-\(isFresh)" }
 }
 
 
-// MARK: - Session Detail (with color-coded valgus values)
+// MARK: - Session Detail Sheet (Color-coded values)
 struct SessionDetailSheet: View {
     @Environment(DataEngine.self) private var engine
     let date: Date; let isFresh: Bool
@@ -1267,22 +1913,34 @@ struct SessionDetailSheet: View {
             ZStack {
                 Color.bgPrimary.ignoresSafeArea()
                 ScrollView {
-                    VStack(alignment: .leading, spacing: 12) {
-                        Text(isFresh ? "Fresh Session" : "Fatigued Session").font(.headline).foregroundStyle(.white)
-                        Text(date, style: .date).font(.subheadline).foregroundStyle(Color.textSecondary)
-                        Divider().background(Color.cardBg)
+                    VStack(alignment: .leading, spacing: 14) {
+                        HStack(spacing: 8) {
+                            Image(systemName: isFresh ? "leaf.fill" : "flame.fill")
+                                .foregroundStyle(isFresh ? Color.statusGreen : Color.statusYellow)
+                            Text(isFresh ? "Fresh Session" : "Fatigued Session")
+                                .font(.headline).foregroundStyle(.white)
+                        }
+                        Text(date, format: .dateTime.weekday(.wide).month(.wide).day().year())
+                            .font(.subheadline).foregroundStyle(Color.textSecondary)
+
+                        Divider().background(Color.bgCardLight)
+
                         ForEach(engine.athletes) { a in
-                            if let s = a.sessions.first(where: { $0.date == date && $0.isFresh == isFresh }) {
-                                HStack {
-                                    JerseyCircle(number: a.jersey, size: 32)
+                            if let s = a.sessions.first(where: {
+                                abs($0.date.timeIntervalSince(date)) < 86400 && $0.isFresh == isFresh
+                            }) {
+                                HStack(spacing: 12) {
+                                    JerseyCircle(number: a.jersey, size: 34)
                                     Text(a.name).font(.subheadline).foregroundStyle(.white).lineLimit(1)
                                     Spacer()
-                                    Text(String(format: "%.1f°", s.value)).font(.subheadline.bold())
+                                    Text(String(format: "%.1f°", s.value))
+                                        .font(.subheadline.bold())
                                         .foregroundStyle(isFresh ? .white : valgusColor(for: a, value: s.value))
-                                }.padding(10).background(Color.cardBg).cornerRadius(8)
+                                }
+                                .padding(12).background(Color.bgCard).cornerRadius(10)
                             }
                         }
-                    }.padding()
+                    }.padding(20)
                 }
             }
             .navigationTitle("Session Details")
@@ -1292,73 +1950,167 @@ struct SessionDetailSheet: View {
 }
 
 
-// MARK: - Settings
+// MARK: - Settings (Complete)
 struct SettingsView: View {
     @Environment(DataEngine.self) private var engine
     @State private var showResetConfirm = false
+    @State private var showSignOutConfirm = false
 
     var body: some View {
         NavigationStack {
             ZStack {
                 Color.bgPrimary.ignoresSafeArea()
-                List {
-                    Section("Team") {
-                        HStack {
-                            Text("Team Name").foregroundStyle(.white)
-                            Spacer()
-                            TextField("", text: Binding(get: { engine.teamName }, set: { engine.teamName = $0; engine.storedTeamName = $0 }))
+                ScrollView {
+                    VStack(spacing: 20) {
+                        // Team Section
+                        SettingsSection(title: "TEAM") {
+                            SettingsRow(icon: "person.3.fill", label: "Team Name") {
+                                TextField("", text: Binding(
+                                    get: { engine.teamName },
+                                    set: { engine.teamName = $0; engine.storedTeamName = $0 }
+                                ))
                                 .multilineTextAlignment(.trailing).foregroundStyle(Color.brand)
-                        }.listRowBackground(Color.cardBg)
-                        HStack {
-                            Text("Coach").foregroundStyle(.white)
-                            Spacer()
-                            TextField("", text: Binding(get: { engine.userName }, set: { engine.userName = $0; engine.storedCoachName = $0 }))
+                            }
+                            SettingsRow(icon: "person.fill", label: "Coach") {
+                                TextField("", text: Binding(
+                                    get: { engine.userName },
+                                    set: { engine.userName = $0; engine.storedCoachName = $0 }
+                                ))
                                 .multilineTextAlignment(.trailing).foregroundStyle(Color.brand)
-                        }.listRowBackground(Color.cardBg)
-                        HStack {
-                            Text("Sport").foregroundStyle(.white)
-                            Spacer()
-                            Text(engine.storedSportType.isEmpty ? "Not set" : engine.storedSportType)
-                                .foregroundStyle(Color.textSecondary)
-                        }.listRowBackground(Color.cardBg)
-                    }
+                            }
+                            SettingsRow(icon: "sportscourt.fill", label: "Sport") {
+                                Text(engine.sportType).foregroundStyle(Color.textSecondary)
+                            }
+                        }
 
-                    Section("Risk Thresholds (Fatigue Degradation %)") {
-                        HStack {
-                            Text("Caution at").foregroundStyle(.white)
-                            Spacer()
-                            TextField("", value: Binding(get: { engine.cautionThreshold }, set: { engine.cautionThreshold = $0 }), format: .number)
-                                .keyboardType(.decimalPad).multilineTextAlignment(.trailing).frame(width: 60).foregroundStyle(Color.statusYellow)
-                            Text("%").foregroundStyle(Color.textSecondary)
-                        }.listRowBackground(Color.cardBg)
-                        HStack {
-                            Text("At Risk at").foregroundStyle(.white)
-                            Spacer()
-                            TextField("", value: Binding(get: { engine.atRiskThreshold }, set: { engine.atRiskThreshold = $0 }), format: .number)
-                                .keyboardType(.decimalPad).multilineTextAlignment(.trailing).frame(width: 60).foregroundStyle(Color.statusRed)
-                            Text("%").foregroundStyle(Color.textSecondary)
-                        }.listRowBackground(Color.cardBg)
-                    }
+                        // Risk Thresholds
+                        SettingsSection(title: "RISK THRESHOLDS") {
+                            SettingsRow(icon: "exclamationmark.triangle", label: "Caution at") {
+                                HStack(spacing: 4) {
+                                    TextField("", value: Binding(
+                                        get: { engine.cautionThreshold },
+                                        set: { engine.cautionThreshold = $0 }
+                                    ), format: .number)
+                                    .keyboardType(.decimalPad).multilineTextAlignment(.trailing)
+                                    .frame(width: 50).foregroundStyle(Color.statusYellow)
+                                    Text("%").foregroundStyle(Color.textSecondary)
+                                }
+                            }
+                            SettingsRow(icon: "xmark.octagon", label: "At Risk at") {
+                                HStack(spacing: 4) {
+                                    TextField("", value: Binding(
+                                        get: { engine.atRiskThreshold },
+                                        set: { engine.atRiskThreshold = $0 }
+                                    ), format: .number)
+                                    .keyboardType(.decimalPad).multilineTextAlignment(.trailing)
+                                    .frame(width: 50).foregroundStyle(Color.statusRed)
+                                    Text("%").foregroundStyle(Color.textSecondary)
+                                }
+                            }
+                        }
 
-                    Section("About") {
-                        HStack { Text("Version").foregroundStyle(.white); Spacer(); Text("2.1.0").foregroundStyle(Color.textSecondary) }.listRowBackground(Color.cardBg)
-                        HStack { Text("Build").foregroundStyle(.white); Spacer(); Text("2025.07").foregroundStyle(Color.textSecondary) }.listRowBackground(Color.cardBg)
-                    }
+                        // Notifications
+                        SettingsSection(title: "NOTIFICATIONS") {
+                            HStack {
+                                Image(systemName: "bell.badge.fill").foregroundStyle(Color.brand).frame(width: 24)
+                                Text("Risk Alerts").foregroundStyle(.white)
+                                Spacer()
+                                Toggle("", isOn: Binding(
+                                    get: { engine.notificationsEnabled },
+                                    set: { val in
+                                        if val { engine.requestNotificationPermission() }
+                                        else { engine.notificationsEnabled = false }
+                                    }
+                                )).labelsHidden().tint(Color.brand)
+                            }.padding(14)
+                        }
 
-                    Section {
-                        Button("Reset Demo Data") { showResetConfirm = true }
-                            .foregroundStyle(Color.statusYellow).listRowBackground(Color.cardBg)
-                        Button("Sign Out") { engine.isSignedIn = false; engine.hasCompletedOnboarding = false }
-                            .foregroundStyle(Color.statusRed).listRowBackground(Color.cardBg)
-                    }
+                        // About
+                        SettingsSection(title: "ABOUT") {
+                            SettingsRow(icon: "info.circle", label: "Version") {
+                                Text("3.0.0").foregroundStyle(Color.textSecondary)
+                            }
+                            SettingsRow(icon: "hammer", label: "Build") {
+                                Text("2025.07").foregroundStyle(Color.textSecondary)
+                            }
+                        }
+
+                        // Actions
+                        VStack(spacing: 10) {
+                            Button {
+                                showResetConfirm = true
+                            } label: {
+                                HStack {
+                                    Image(systemName: "arrow.counterclockwise")
+                                    Text("Reset Demo Data")
+                                }
+                                .font(.subheadline.bold())
+                                .frame(maxWidth: .infinity).padding(14)
+                                .background(Color.bgCard).foregroundStyle(Color.statusYellow)
+                                .cornerRadius(12)
+                            }
+                            Button {
+                                showSignOutConfirm = true
+                            } label: {
+                                HStack {
+                                    Image(systemName: "rectangle.portrait.and.arrow.forward")
+                                    Text("Sign Out")
+                                }
+                                .font(.subheadline.bold())
+                                .frame(maxWidth: .infinity).padding(14)
+                                .background(Color.bgCard).foregroundStyle(Color.statusRed)
+                                .cornerRadius(12)
+                            }
+                        }.padding(.horizontal)
+                    }.padding(.vertical)
                 }
-                .scrollContentBackground(.hidden)
             }
             .navigationTitle("Settings")
             .alert("Reset Demo Data?", isPresented: $showResetConfirm) {
                 Button("Cancel", role: .cancel) {}
                 Button("Reset", role: .destructive) { engine.resetDemo() }
-            } message: { Text("This will replace all data with fresh demo athletes.") }
+            } message: { Text("This will replace all data with fresh demo athletes and sessions.") }
+            .alert("Sign Out?", isPresented: $showSignOutConfirm) {
+                Button("Cancel", role: .cancel) {}
+                Button("Sign Out", role: .destructive) {
+                    engine.isSignedIn = false
+                    engine.hasCompletedOnboarding = false
+                }
+            } message: { Text("You'll need to sign in again to access your data.") }
         }
+    }
+}
+
+
+// MARK: - Settings Helpers
+struct SettingsSection<Content: View>: View {
+    let title: String
+    @ViewBuilder let content: Content
+    var body: some View {
+        VStack(alignment: .leading, spacing: 0) {
+            Text(title)
+                .font(.system(size: 11, weight: .bold))
+                .foregroundStyle(Color.textSecondary)
+                .tracking(1.2)
+                .padding(.horizontal).padding(.bottom, 8)
+            VStack(spacing: 1) { content }
+                .background(Color.bgCard)
+                .cornerRadius(14)
+                .padding(.horizontal)
+        }
+    }
+}
+
+struct SettingsRow<Accessory: View>: View {
+    let icon: String; let label: String
+    @ViewBuilder let accessory: Accessory
+    var body: some View {
+        HStack(spacing: 12) {
+            Image(systemName: icon).foregroundStyle(Color.brand).frame(width: 24)
+            Text(label).foregroundStyle(.white)
+            Spacer()
+            accessory
+        }
+        .padding(14)
     }
 }
