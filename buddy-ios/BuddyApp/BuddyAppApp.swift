@@ -423,9 +423,16 @@ class DataEngine {
         }
     }
 
-    func addAthlete(name: String, jersey: Int, position: String) {
-        athletes.append(Athlete(id: UUID(), name: name, jersey: jersey, position: position, sessions: []))
+    func addAthlete(name: String, jersey: Int, position: String, photoData: Data? = nil) {
+        athletes.append(Athlete(id: UUID(), name: name, jersey: jersey, position: position, sessions: [], photoData: photoData))
         save()
+    }
+
+    func updateAthletePhoto(athleteId: UUID, photoData: Data?) {
+        if let idx = athletes.firstIndex(where: { $0.id == athleteId }) {
+            athletes[idx].photoData = photoData
+            save()
+        }
     }
 
     func removeAthlete(_ id: UUID) { athletes.removeAll { $0.id == id }; save() }
@@ -1796,13 +1803,30 @@ struct AlertCard: View {
 // MARK: - Athlete Row
 struct AthleteRow: View {
     let readiness: AthleteReadiness
+    @Environment(DataEngine.self) private var engine
+
+    private var latestNote: String? {
+        // Find the most recent session and check if there's a note for it
+        guard let lastSession = readiness.allSessions.last else { return nil }
+        let note = engine.getNote(date: lastSession.date, isFresh: lastSession.isFresh)
+        return note.isEmpty ? nil : note
+    }
+
     var body: some View {
         HStack(spacing: 12) {
             JerseyCircle(number: readiness.jersey, size: 44, glowing: readiness.status == .atRisk)
             VStack(alignment: .leading, spacing: 3) {
                 Text(readiness.name).font(.subheadline.bold()).foregroundStyle(.white).lineLimit(1)
                 Text(readiness.position).font(.caption).foregroundStyle(Color.textSecondary)
-                Text(readiness.recommendation).font(.system(size: 10)).foregroundStyle(Color.textSecondary.opacity(0.7)).lineLimit(1)
+                if let note = latestNote {
+                    HStack(spacing: 4) {
+                        Image(systemName: "note.text").font(.system(size: 8))
+                        Text(note).lineLimit(1)
+                    }
+                    .font(.system(size: 10)).foregroundStyle(Color.brand.opacity(0.7))
+                } else {
+                    Text(readiness.recommendation).font(.system(size: 10)).foregroundStyle(Color.textSecondary.opacity(0.7)).lineLimit(1)
+                }
             }
             Spacer()
             // Sparkline
@@ -1841,6 +1865,7 @@ struct AthleteDetailView: View {
     @State private var newInjuryNote = ""
     @State private var showVideoPlayer = false
     @State private var videoPlayerURL: URL? = nil
+    @State private var selectedPhoto: PhotosPickerItem? = nil
 
     var body: some View {
         ScrollView {
@@ -1849,7 +1874,22 @@ struct AthleteDetailView: View {
                     // Sticky Header
                     VStack(spacing: 10) {
                         if let athlete = engine.athletes.first(where: { $0.id == athleteID }) {
-                            AthleteAvatarView(athlete: athlete, size: 72, glowing: r.status == .atRisk)
+                            PhotosPicker(selection: $selectedPhoto, matching: .images) {
+                                ZStack(alignment: .bottomTrailing) {
+                                    AthleteAvatarView(athlete: athlete, size: 72, glowing: r.status == .atRisk)
+                                    Image(systemName: "camera.circle.fill")
+                                        .font(.system(size: 20))
+                                        .foregroundStyle(Color.brand)
+                                        .background(Circle().fill(Color.bgPrimary).frame(width: 18, height: 18))
+                                }
+                            }
+                            .onChange(of: selectedPhoto) { _, item in
+                                Task {
+                                    if let data = try? await item?.loadTransferable(type: Data.self) {
+                                        engine.updateAthletePhoto(athleteId: athleteID, photoData: data)
+                                    }
+                                }
+                            }
                         } else {
                             JerseyCircle(number: r.jersey, size: 72, glowing: r.status == .atRisk)
                         }
@@ -2012,17 +2052,30 @@ struct AthleteDetailView: View {
                     VStack(alignment: .leading, spacing: 10) {
                         Text("Session History").font(.headline).foregroundStyle(.white)
                         ForEach(r.allSessions.reversed()) { s in
-                            HStack(spacing: 0) {
-                                SessionHistoryRow(session: s, baselineValgus: r.baselineValgus,
-                                    cautionThreshold: engine.cautionThreshold, atRiskThreshold: engine.atRiskThreshold)
-                                if let url = engine.getVideoURL(athleteId: athleteID, date: s.date) {
-                                    Button {
-                                        videoPlayerURL = url
-                                        showVideoPlayer = true
-                                    } label: {
-                                        Image(systemName: "play.circle.fill")
-                                            .font(.title3).foregroundStyle(Color.brand)
-                                    }.padding(.leading, 8)
+                            VStack(alignment: .leading, spacing: 4) {
+                                HStack(spacing: 0) {
+                                    SessionHistoryRow(session: s, baselineValgus: r.baselineValgus,
+                                        cautionThreshold: engine.cautionThreshold, atRiskThreshold: engine.atRiskThreshold)
+                                    if let url = engine.getVideoURL(athleteId: athleteID, date: s.date) {
+                                        Button {
+                                            videoPlayerURL = url
+                                            showVideoPlayer = true
+                                        } label: {
+                                            Image(systemName: "play.circle.fill")
+                                                .font(.title3).foregroundStyle(Color.brand)
+                                        }.padding(.leading, 8)
+                                    }
+                                }
+                                // Show session note if exists
+                                let note = engine.getNote(date: s.date, isFresh: s.isFresh)
+                                if !note.isEmpty {
+                                    HStack(spacing: 5) {
+                                        Image(systemName: "note.text").font(.system(size: 9))
+                                        Text(note).lineLimit(2)
+                                    }
+                                    .font(.system(size: 11))
+                                    .foregroundStyle(Color.brand.opacity(0.7))
+                                    .padding(.leading, 4)
                                 }
                             }
                         }
@@ -2303,28 +2356,37 @@ struct CaptureFlowView: View {
     @State private var sessionNotes = ""
     @State private var showCameraGuide = false
     @State private var cameraGuideAthleteID: UUID? = nil
+    @State private var showSuccessCelebration = false
+    @State private var celebrationScale: CGFloat = 0.3
+    @State private var celebrationOpacity: Double = 0
 
     var body: some View {
         NavigationStack {
             ZStack {
                 Color.bgPrimary.ignoresSafeArea()
                 VStack(spacing: 0) {
-                    // Animated progress bar
+                    // Animated progress bar with glow on active step
                     HStack(spacing: 5) {
                         ForEach(1...4, id: \.self) { s in
                             Capsule()
                                 .fill(s <= step ? Color.brand : Color.bgCardLight)
                                 .frame(height: 4)
-                                .animation(.spring(response: 0.4, dampingFraction: 0.75), value: step)
+                                .shadow(color: s == step ? Color.brand.opacity(0.5) : .clear, radius: 4)
+                                .scaleEffect(y: s == step ? 1.3 : 1.0)
+                                .animation(.spring(response: 0.35, dampingFraction: 0.6), value: step)
                         }
                     }.padding(.horizontal).padding(.top, 8)
 
-                    // Step label
+                    // Step label with animated transition
                     HStack {
                         Text(stepTitle).font(.caption.bold()).foregroundStyle(Color.brand)
+                            .contentTransition(.numericText())
                         Spacer()
                         Text("Step \(step) of 4").font(.caption).foregroundStyle(Color.textSecondary)
-                    }.padding(.horizontal).padding(.top, 8)
+                            .contentTransition(.numericText())
+                    }
+                    .padding(.horizontal).padding(.top, 8)
+                    .animation(.easeOut(duration: 0.3), value: step)
 
                     ScrollView {
                         VStack(spacing: 20) {
@@ -2337,8 +2399,8 @@ struct CaptureFlowView: View {
                                 }
                             }
                             .transition(.asymmetric(
-                                insertion: .move(edge: .trailing).combined(with: .opacity),
-                                removal: .move(edge: .leading).combined(with: .opacity)
+                                insertion: .move(edge: .trailing).combined(with: .opacity).combined(with: .scale(scale: 0.95)),
+                                removal: .move(edge: .leading).combined(with: .opacity).combined(with: .scale(scale: 0.95))
                             ))
                         }.padding()
                         .animation(.spring(response: 0.4, dampingFraction: 0.75), value: step)
@@ -2476,16 +2538,18 @@ struct CaptureFlowView: View {
                     guard let a = engine.athletes.first(where: { $0.id == id }) else { return nil }
                     return CaptureItem(id: a.id, name: a.name)
                 }
-                withAnimation(.spring(response: 0.4, dampingFraction: 0.75)) { step = 2 }
+                withAnimation(.spring(response: 0.45, dampingFraction: 0.7, blendDuration: 0.1)) { step = 2 }
             } label: {
                 HStack {
                     Text("Next").font(.headline)
                     Image(systemName: "arrow.right")
+                        .font(.system(size: 14, weight: .bold))
                 }
                 .frame(maxWidth: .infinity).padding(15)
                 .background(selectedAthleteIDs.isEmpty ? Color.bgCardLight : Color.brand)
                 .foregroundStyle(selectedAthleteIDs.isEmpty ? Color.textSecondary : .black)
                 .cornerRadius(14)
+                .shadow(color: selectedAthleteIDs.isEmpty ? .clear : Color.brand.opacity(0.3), radius: 8, y: 4)
             }.disabled(selectedAthleteIDs.isEmpty)
         }
     }
@@ -2555,7 +2619,7 @@ struct CaptureFlowView: View {
             let allAttached = captureItems.allSatisfy(\.videoAttached)
             HStack(spacing: 12) {
                 Button {
-                    withAnimation(.spring(response: 0.4, dampingFraction: 0.75)) { step = 1 }
+                    withAnimation(.spring(response: 0.45, dampingFraction: 0.7, blendDuration: 0.1)) { step = 1 }
                 } label: {
                     Text("Back").font(.subheadline.bold())
                         .padding(14).frame(maxWidth: .infinity)
@@ -2563,7 +2627,7 @@ struct CaptureFlowView: View {
                 }
                 Button {
                     Haptics.medium()
-                    withAnimation(.spring(response: 0.4, dampingFraction: 0.75)) { step = 3 }
+                    withAnimation(.spring(response: 0.45, dampingFraction: 0.7, blendDuration: 0.1)) { step = 3 }
                     startAnalysis()
                 } label: {
                     HStack {
@@ -2574,6 +2638,7 @@ struct CaptureFlowView: View {
                     .background(allAttached && consentGiven ? Color.brand : Color.bgCardLight)
                     .foregroundStyle(allAttached && consentGiven ? .black : Color.textSecondary)
                     .cornerRadius(14)
+                    .shadow(color: allAttached && consentGiven ? Color.brand.opacity(0.3) : .clear, radius: 8, y: 4)
                 }.disabled(!allAttached || !consentGiven)
             }
         }
@@ -2581,11 +2646,15 @@ struct CaptureFlowView: View {
 
 
     // Step 3: Processing with animated checkmarks
+    @State private var brainPulsing = false
     private var captureStep3: some View {
         VStack(spacing: 18) {
             Image(systemName: "brain.head.profile")
                 .font(.system(size: 36)).foregroundStyle(Color.brand)
-                .shadow(color: Color.brandGlow, radius: 8)
+                .shadow(color: Color.brandGlow, radius: brainPulsing ? 16 : 6)
+                .scaleEffect(brainPulsing ? 1.08 : 1.0)
+                .animation(.easeInOut(duration: 1.0).repeatForever(autoreverses: true), value: brainPulsing)
+                .onAppear { brainPulsing = true }
             Text("Analyzing Landing Mechanics")
                 .font(.headline).foregroundStyle(.white)
             Text("Running pose estimation and biomechanics analysis...")
@@ -2612,7 +2681,24 @@ struct CaptureFlowView: View {
 
             if captureItems.allSatisfy(\.done) {
                 Button {
+                    Haptics.success()
+                    showSuccessCelebration = true
                     withAnimation(.spring(response: 0.4, dampingFraction: 0.75)) { step = 4 }
+                    // Animate celebration
+                    withAnimation(.spring(response: 0.5, dampingFraction: 0.6)) {
+                        celebrationScale = 1.0
+                        celebrationOpacity = 1.0
+                    }
+                    // Fade out celebration after delay
+                    DispatchQueue.main.asyncAfter(deadline: .now() + 2.0) {
+                        withAnimation(.easeOut(duration: 0.5)) {
+                            celebrationOpacity = 0
+                        }
+                        DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) {
+                            showSuccessCelebration = false
+                            celebrationScale = 0.3
+                        }
+                    }
                 } label: {
                     HStack {
                         Text("View Results").font(.headline)
@@ -2621,20 +2707,21 @@ struct CaptureFlowView: View {
                     .frame(maxWidth: .infinity).padding(15)
                     .background(Color.brand).foregroundStyle(.black).cornerRadius(14)
                 }
-                .transition(.scale.combined(with: .opacity))
+                .transition(.move(edge: .bottom).combined(with: .scale(scale: 0.8)).combined(with: .opacity))
             }
         }
     }
 
     // Step 4: Results
     private var captureStep4: some View {
-        VStack(alignment: .leading, spacing: 16) {
-            HStack {
-                Image(systemName: "checkmark.seal.fill").font(.title2).foregroundStyle(Color.statusGreen)
-                Text("Analysis Complete").font(.headline).foregroundStyle(.white)
-            }
-            Text(isFresh ? "Fresh baseline session recorded successfully." : "Fatigued session — showing delta vs baseline.")
-                .font(.caption).foregroundStyle(Color.textSecondary)
+        ZStack {
+            VStack(alignment: .leading, spacing: 16) {
+                HStack {
+                    Image(systemName: "checkmark.seal.fill").font(.title2).foregroundStyle(Color.statusGreen)
+                    Text("Analysis Complete").font(.headline).foregroundStyle(.white)
+                }
+                Text(isFresh ? "Fresh baseline session recorded successfully." : "Fatigued session — showing delta vs baseline.")
+                    .font(.caption).foregroundStyle(Color.textSecondary)
 
             // Capture quality tip card
             if captureItems.contains(where: { $0.captureQuality == .poor }) {
@@ -2688,6 +2775,31 @@ struct CaptureFlowView: View {
                 Text("Done").font(.headline)
                     .frame(maxWidth: .infinity).padding(15)
                     .background(Color.brand).foregroundStyle(.black).cornerRadius(14)
+            }
+            }
+
+            // Success celebration overlay
+            if showSuccessCelebration {
+                VStack {
+                    Spacer()
+                    ZStack {
+                        // Radiating circles
+                        ForEach(0..<3, id: \.self) { i in
+                            Circle()
+                                .stroke(Color.brand.opacity(0.3 - Double(i) * 0.1), lineWidth: 2)
+                                .frame(width: CGFloat(60 + i * 40), height: CGFloat(60 + i * 40))
+                                .scaleEffect(celebrationScale)
+                        }
+                        // Center checkmark
+                        Image(systemName: "checkmark.circle.fill")
+                            .font(.system(size: 48))
+                            .foregroundStyle(Color.brand)
+                            .scaleEffect(celebrationScale)
+                    }
+                    .opacity(celebrationOpacity)
+                    Spacer()
+                }
+                .allowsHitTesting(false)
             }
         }
     }
@@ -2837,8 +2949,8 @@ struct RosterView: View {
                 }
             }
             .sheet(isPresented: $showingAdd) {
-                AddAthleteSheet(newName: $newName, newJersey: $newJersey, newPosition: $newPosition) {
-                    engine.addAthlete(name: newName, jersey: Int(newJersey) ?? 0, position: newPosition)
+                AddAthleteSheet(newName: $newName, newJersey: $newJersey, newPosition: $newPosition) { photoData in
+                    engine.addAthlete(name: newName, jersey: Int(newJersey) ?? 0, position: newPosition, photoData: photoData)
                     newName = ""; newJersey = ""; newPosition = ""; showingAdd = false
                 } onCancel: { showingAdd = false }
             }
@@ -2879,7 +2991,7 @@ struct AddAthleteSheet: View {
     @Binding var newName: String
     @Binding var newJersey: String
     @Binding var newPosition: String
-    let onAdd: () -> Void
+    let onAdd: (Data?) -> Void
     let onCancel: () -> Void
     @State private var selectedPhoto: PhotosPickerItem? = nil
     @State private var photoData: Data? = nil
@@ -2927,7 +3039,7 @@ struct AddAthleteSheet: View {
                     Button("Cancel") { onCancel() }.foregroundStyle(Color.textSecondary)
                 }
                 ToolbarItem(placement: .confirmationAction) {
-                    Button("Add") { onAdd() }
+                    Button("Add") { onAdd(photoData) }
                         .foregroundStyle(newName.isEmpty ? Color.textSecondary : Color.brand)
                         .disabled(newName.isEmpty)
                 }
