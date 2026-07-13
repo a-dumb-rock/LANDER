@@ -553,295 +553,304 @@ struct BuddyAppApp: App {
 }
 
 
-// MARK: - Animated Splash (LANDER website-style stick figure landing sequence)
+// MARK: - Animated Splash (LANDER Website Intro Recreation)
 struct AnimatedSplashView: View {
     @Environment(DataEngine.self) private var engine
-
-    // Animation phase: 0 = airborne, 1 = initial contact, 2 = deep landing
-    @State private var phase: Int = 0
-    @State private var showLogo: Bool = false
-    @State private var showTagline: Bool = false
-    @State private var kneeGlowIntensity: CGFloat = 8
-
-    // Joint positions for the stick figure (relative to a 200x400 canvas centered on screen)
-    // Pose 1: Airborne - hips high, arms up
-    private let pose1 = StickPose(
-        head: CGPoint(x: 100, y: 60),
-        shoulderL: CGPoint(x: 75, y: 100), shoulderR: CGPoint(x: 125, y: 100),
-        elbowL: CGPoint(x: 60, y: 70), elbowR: CGPoint(x: 140, y: 70),
-        handL: CGPoint(x: 50, y: 40), handR: CGPoint(x: 150, y: 40),
-        hip: CGPoint(x: 100, y: 170),
-        kneeL: CGPoint(x: 80, y: 220), kneeR: CGPoint(x: 120, y: 220),
-        ankleL: CGPoint(x: 75, y: 280), ankleR: CGPoint(x: 125, y: 280)
-    )
-
-    // Pose 2: Initial contact - hips lower, knees bending, arms coming down
-    private let pose2 = StickPose(
-        head: CGPoint(x: 100, y: 100),
-        shoulderL: CGPoint(x: 75, y: 140), shoulderR: CGPoint(x: 125, y: 140),
-        elbowL: CGPoint(x: 60, y: 170), elbowR: CGPoint(x: 140, y: 170),
-        handL: CGPoint(x: 55, y: 200), handR: CGPoint(x: 145, y: 200),
-        hip: CGPoint(x: 100, y: 220),
-        kneeL: CGPoint(x: 75, y: 280), kneeR: CGPoint(x: 125, y: 280),
-        ankleL: CGPoint(x: 70, y: 340), ankleR: CGPoint(x: 130, y: 340)
-    )
-
-    // Pose 3: Deep landing squat - hips very low, knees deeply bent (valgus-like)
-    private let pose3 = StickPose(
-        head: CGPoint(x: 100, y: 140),
-        shoulderL: CGPoint(x: 72, y: 180), shoulderR: CGPoint(x: 128, y: 180),
-        elbowL: CGPoint(x: 55, y: 220), elbowR: CGPoint(x: 145, y: 220),
-        handL: CGPoint(x: 50, y: 260), handR: CGPoint(x: 150, y: 260),
-        hip: CGPoint(x: 100, y: 270),
-        kneeL: CGPoint(x: 88, y: 320), kneeR: CGPoint(x: 112, y: 320),
-        ankleL: CGPoint(x: 70, y: 370), ankleR: CGPoint(x: 130, y: 370)
-    )
-
-    private var currentPose: StickPose {
-        switch phase {
-        case 0: return pose1
-        case 1: return pose2
-        default: return pose3
-        }
-    }
-
+    
+    // Animation states
+    @State private var groundOpacity: Double = 0
+    @State private var jumperOffset: CGPoint = CGPoint(x: -150, y: 60)
+    @State private var jumperRotation: Double = -10
+    @State private var jumperScale: CGFloat = 0.85
+    @State private var jumperOpacity: Double = 0
+    @State private var defenderRotation: Double = 0
+    @State private var keypointsVisible: [Bool] = Array(repeating: false, count: 9)
+    @State private var flashScale: CGFloat = 0.3
+    @State private var flashOpacity: Double = 0
+    @State private var brandOpacity: Double = 0
+    @State private var brandOffset: CGFloat = 16
+    @State private var phase: Int = 0 // 0=start, 1=airborne, 2=peak, 3=landed
+    
     var body: some View {
         ZStack {
-            // Dark background matching LANDER website (#0a0e14)
             Color(red: 0.04, green: 0.055, blue: 0.078).ignoresSafeArea()
-
+            
             VStack(spacing: 0) {
                 Spacer()
-
-                // Stick figure canvas
+                
+                // Main scene
                 ZStack {
-                    // Draw the stick figure
-                    StickFigureShape(pose: currentPose)
-                        .stroke(Color.white.opacity(0.9), lineWidth: 3)
-                        .frame(width: 200, height: 400)
-
-                    // Head circle
-                    Circle()
-                        .fill(Color.white.opacity(0.9))
-                        .frame(width: 24, height: 24)
-                        .position(currentPose.head)
-                        .frame(width: 200, height: 400)
-
-                    // Left knee - GREEN GLOWING
-                    Circle()
-                        .fill(Color.brand)
-                        .frame(width: 14, height: 14)
-                        .shadow(color: Color.brand, radius: kneeGlowIntensity)
-                        .shadow(color: Color.brand.opacity(0.6), radius: kneeGlowIntensity * 1.5)
-                        .position(currentPose.kneeL)
-                        .frame(width: 200, height: 400)
-
-                    // Right knee - GREEN GLOWING
-                    Circle()
-                        .fill(Color.brand)
-                        .frame(width: 14, height: 14)
-                        .shadow(color: Color.brand, radius: kneeGlowIntensity)
-                        .shadow(color: Color.brand.opacity(0.6), radius: kneeGlowIntensity * 1.5)
-                        .position(currentPose.kneeR)
-                        .frame(width: 200, height: 400)
-
-                    // Other joint dots (subtle)
-                    ForEach(jointPositions, id: \.id) { joint in
-                        Circle()
-                            .fill(Color.white.opacity(0.5))
-                            .frame(width: 6, height: 6)
-                            .position(joint.point)
-                            .frame(width: 200, height: 400)
+                    // Ground line
+                    Path { path in
+                        path.move(to: CGPoint(x: 40, y: 200))
+                        path.addLine(to: CGPoint(x: 320, y: 200))
                     }
+                    .stroke(Color.white.opacity(0.14), lineWidth: 2)
+                    .opacity(groundOpacity)
+                    
+                    // Defender (gray stick figure that topples)
+                    DefenderFigure()
+                        .rotationEffect(.degrees(defenderRotation), anchor: UnitPoint(x: 0.5, y: 1.0))
+                        .offset(x: 20, y: -10)
+                    
+                    // Landing flash (green circle that expands)
+                    Circle()
+                        .fill(Color.brand)
+                        .frame(width: 12, height: 12)
+                        .scaleEffect(flashScale)
+                        .opacity(flashOpacity)
+                        .offset(x: 110, y: 175)
+                    
+                    // Leaping athlete
+                    LeapingAthlete(keypointsVisible: keypointsVisible)
+                        .offset(x: jumperOffset.x, y: jumperOffset.y)
+                        .rotationEffect(.degrees(jumperRotation))
+                        .scaleEffect(jumperScale)
+                        .opacity(jumperOpacity)
                 }
-                .animation(.spring(response: 0.8, dampingFraction: 0.7), value: phase)
-
-                Spacer().frame(height: 30)
-
-                // LANDER logo + text (fades in after landing)
-                VStack(spacing: 10) {
-                    // Diamond/chevron logo
-                    Image(systemName: "diamond.fill")
-                        .font(.system(size: 28, weight: .bold))
-                        .foregroundStyle(Color.brand)
-                        .shadow(color: Color.brand.opacity(0.5), radius: 6)
-
+                .frame(width: 360, height: 260)
+                
+                Spacer().frame(height: 20)
+                
+                // Brand (fades in after landing)
+                VStack(spacing: 12) {
+                    // Diamond logo
+                    LanderDiamond()
+                        .frame(width: 40, height: 52)
+                        .shadow(color: Color.brand.opacity(0.35), radius: 16)
+                    
                     Text("LANDER")
-                        .font(.system(size: 36, weight: .black, design: .default))
-                        .foregroundStyle(.white)
+                        .font(.system(size: 28, weight: .bold))
                         .tracking(4)
-
+                        .foregroundStyle(.white)
+                    
                     Text("Catch ACL risk before it happens")
-                        .font(.system(size: 14, weight: .medium))
-                        .foregroundStyle(Color.white.opacity(0.6))
-                        .opacity(showTagline ? 1 : 0)
-                        .offset(y: showTagline ? 0 : 8)
+                        .font(.system(size: 13))
+                        .foregroundStyle(Color(white: 0.6))
                 }
-                .opacity(showLogo ? 1 : 0)
-                .scaleEffect(showLogo ? 1.0 : 0.9)
-                .animation(.easeOut(duration: 0.6), value: showLogo)
-                .animation(.easeOut(duration: 0.5).delay(0.3), value: showTagline)
-
+                .opacity(brandOpacity)
+                .offset(y: brandOffset)
+                
                 Spacer()
-
-                // Skip intro button
+                
+                // Skip button
                 HStack {
                     Spacer()
                     Button {
-                        withAnimation(.easeOut(duration: 0.3)) {
-                            engine.showSplash = false
-                        }
+                        withAnimation(.easeOut(duration: 0.3)) { engine.showSplash = false }
                     } label: {
                         Text("Skip intro →")
                             .font(.system(size: 13, weight: .medium))
-                            .foregroundStyle(Color.white.opacity(0.4))
+                            .foregroundStyle(Color(white: 0.45))
+                            .padding(.horizontal, 16)
+                            .padding(.vertical, 8)
+                            .overlay(Capsule().stroke(Color.white.opacity(0.16), lineWidth: 1))
                     }
                     .padding(.trailing, 24)
-                    .padding(.bottom, 40)
+                    .padding(.bottom, 30)
                 }
             }
         }
-        .onAppear {
-            // Pose 1 -> Pose 2 at 1.0s
-            DispatchQueue.main.asyncAfter(deadline: .now() + 1.0) {
-                phase = 1
-                withAnimation(.easeInOut(duration: 0.3)) {
-                    kneeGlowIntensity = 14
+        .onAppear { startAnimation() }
+    }
+    
+    private func startAnimation() {
+        // Ground fades in
+        withAnimation(.easeOut(duration: 0.5).delay(0.1)) { groundOpacity = 1 }
+        
+        // Athlete leaps (4-phase arc)
+        // Phase 1: appear and launch (0-0.5s)
+        withAnimation(.easeOut(duration: 0.3).delay(0.15)) { jumperOpacity = 1 }
+        
+        // Phase 2: arc up to peak (0.15-1.0s)
+        withAnimation(.easeInOut(duration: 0.85).delay(0.15)) {
+            jumperOffset = CGPoint(x: 6, y: -84)
+            jumperRotation = 9
+            jumperScale = 1.08
+        }
+        
+        // Keypoints snap on during arc (0.55-1.1s)
+        for i in 0..<9 {
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.55 + Double(i) * 0.06) {
+                withAnimation(.spring(response: 0.3, dampingFraction: 0.5)) {
+                    keypointsVisible[i] = true
                 }
             }
-            // Pose 2 -> Pose 3 at 2.0s
-            DispatchQueue.main.asyncAfter(deadline: .now() + 2.0) {
-                phase = 2
-                withAnimation(.easeInOut(duration: 0.4)) {
-                    kneeGlowIntensity = 20
-                }
+        }
+        
+        // Phase 3: descend to landing (1.0-1.5s)
+        withAnimation(.easeIn(duration: 0.5).delay(1.0)) {
+            jumperOffset = CGPoint(x: 112, y: 24)
+            jumperRotation = 13
+            jumperScale = 1.0
+        }
+        
+        // Phase 4: settle (1.5-1.7s)
+        withAnimation(.easeOut(duration: 0.2).delay(1.5)) {
+            jumperRotation = 0
+        }
+        
+        // Defender topples (0.15-1.9s)
+        withAnimation(.timingCurve(0.5, 0.05, 0.5, 1, duration: 1.75).delay(0.5)) {
+            defenderRotation = -90
+        }
+        
+        // Landing flash (1.35s)
+        DispatchQueue.main.asyncAfter(deadline: .now() + 1.35) {
+            withAnimation(.easeOut(duration: 0.7)) {
+                flashScale = 7
+                flashOpacity = 0.55
             }
-            // Show logo at 2.5s
-            DispatchQueue.main.asyncAfter(deadline: .now() + 2.5) {
-                showLogo = true
-                DispatchQueue.main.asyncAfter(deadline: .now() + 0.3) {
-                    showTagline = true
-                }
+            withAnimation(.easeOut(duration: 0.7).delay(0.15)) {
+                flashOpacity = 0
             }
-            // Auto-dismiss at 3.5s
-            DispatchQueue.main.asyncAfter(deadline: .now() + 3.5) {
-                withAnimation(.spring(response: 0.4, dampingFraction: 0.75)) {
-                    engine.showSplash = false
-                }
+        }
+        
+        // Brand appears (1.6s)
+        withAnimation(.timingCurve(0.2, 0.7, 0.2, 1, duration: 0.65).delay(1.6)) {
+            brandOpacity = 1
+            brandOffset = 0
+        }
+        
+        // Auto-dismiss (3.5s)
+        DispatchQueue.main.asyncAfter(deadline: .now() + 3.5) {
+            withAnimation(.spring(response: 0.5, dampingFraction: 0.8)) {
+                engine.showSplash = false
             }
         }
     }
+}
 
-    // Helper: non-knee joint positions for subtle dots
-    private var jointPositions: [JointPoint] {
-        let p = currentPose
-        return [
-            JointPoint(id: "sL", point: p.shoulderL),
-            JointPoint(id: "sR", point: p.shoulderR),
-            JointPoint(id: "eL", point: p.elbowL),
-            JointPoint(id: "eR", point: p.elbowR),
-            JointPoint(id: "hL", point: p.handL),
-            JointPoint(id: "hR", point: p.handR),
-            JointPoint(id: "hip", point: p.hip),
-            JointPoint(id: "aL", point: p.ankleL),
-            JointPoint(id: "aR", point: p.ankleR)
-        ]
+// MARK: - Leaping Athlete Figure
+struct LeapingAthlete: View {
+    let keypointsVisible: [Bool]
+    
+    var body: some View {
+        ZStack {
+            // Body (white stick figure with glow)
+            Path { path in
+                // Torso
+                path.move(to: CGPoint(x: 0, y: -30))
+                path.addLine(to: CGPoint(x: 0, y: -4))
+                // Left leg
+                path.move(to: CGPoint(x: 0, y: -4))
+                path.addLine(to: CGPoint(x: -16, y: 20))
+                path.addLine(to: CGPoint(x: -30, y: 30))
+                // Right leg
+                path.move(to: CGPoint(x: 0, y: -4))
+                path.addLine(to: CGPoint(x: 16, y: 18))
+                path.addLine(to: CGPoint(x: 12, y: 40))
+                // Left arm
+                path.move(to: CGPoint(x: 0, y: -28))
+                path.addLine(to: CGPoint(x: -16, y: -38))
+                path.addLine(to: CGPoint(x: -24, y: -30))
+                // Right arm (reaching up for ball)
+                path.move(to: CGPoint(x: 0, y: -28))
+                path.addLine(to: CGPoint(x: 14, y: -46))
+                path.addLine(to: CGPoint(x: 20, y: -64))
+            }
+            .stroke(Color(white: 0.92), style: StrokeStyle(lineWidth: 4, lineCap: .round, lineJoin: .round))
+            .shadow(color: Color.brand.opacity(0.22), radius: 8)
+            
+            // Head
+            Circle()
+                .fill(Color(white: 0.92))
+                .frame(width: 24, height: 24)
+                .offset(x: 0, y: -45)
+            
+            // Football
+            Ellipse()
+                .fill(Color(red: 0.54, green: 0.29, blue: 0.16))
+                .stroke(Color(red: 0.79, green: 0.55, blue: 0.37), lineWidth: 1.3)
+                .frame(width: 26, height: 16)
+                .rotationEffect(.degrees(-26))
+                .offset(x: 26, y: -68)
+            
+            // Pose keypoints (green dots that snap on)
+            let kpPositions: [CGPoint] = [
+                CGPoint(x: 0, y: -30),   // shoulder
+                CGPoint(x: 0, y: -4),    // hip
+                CGPoint(x: -16, y: -38), // left elbow
+                CGPoint(x: 14, y: -46),  // right elbow
+                CGPoint(x: 20, y: -64),  // right hand
+                CGPoint(x: -16, y: 20),  // left knee
+                CGPoint(x: 16, y: 18),   // right knee
+                CGPoint(x: -30, y: 30),  // left ankle
+                CGPoint(x: 12, y: 40),   // right ankle
+            ]
+            
+            ForEach(0..<9, id: \.self) { i in
+                Circle()
+                    .fill(Color(red: 0.04, green: 0.055, blue: 0.078))
+                    .stroke(Color.brand, lineWidth: 2)
+                    .frame(width: 7, height: 7)
+                    .shadow(color: Color.brand, radius: 4)
+                    .scaleEffect(keypointsVisible[i] ? 1.0 : 0.0)
+                    .offset(x: kpPositions[i].x, y: kpPositions[i].y)
+            }
+        }
+    }
+}
+
+// MARK: - Defender Figure (gray, topples)
+struct DefenderFigure: View {
+    var body: some View {
+        Path { path in
+            // Torso
+            path.move(to: CGPoint(x: 0, y: -40))
+            path.addLine(to: CGPoint(x: 0, y: -4))
+            // Left leg
+            path.move(to: CGPoint(x: 0, y: -4))
+            path.addLine(to: CGPoint(x: -12, y: 16))
+            path.addLine(to: CGPoint(x: -18, y: 36))
+            // Right leg
+            path.move(to: CGPoint(x: 0, y: -4))
+            path.addLine(to: CGPoint(x: 12, y: 16))
+            path.addLine(to: CGPoint(x: 18, y: 36))
+            // Arms
+            path.move(to: CGPoint(x: 0, y: -36))
+            path.addLine(to: CGPoint(x: -14, y: -52))
+            path.addLine(to: CGPoint(x: -21, y: -58))
+            path.move(to: CGPoint(x: 0, y: -36))
+            path.addLine(to: CGPoint(x: 14, y: -52))
+            path.addLine(to: CGPoint(x: 21, y: -58))
+        }
+        .stroke(Color(red: 0.17, green: 0.21, blue: 0.26), style: StrokeStyle(lineWidth: 3.5, lineCap: .round, lineJoin: .round))
+        .overlay(
+            Circle()
+                .fill(Color(red: 0.17, green: 0.21, blue: 0.26))
+                .frame(width: 20, height: 20)
+                .offset(y: -52)
+        )
     }
 }
 
-// MARK: - Stick Figure Data Structures
-private struct JointPoint: Identifiable {
-    let id: String
-    let point: CGPoint
-}
-
-private struct StickPose {
-    let head: CGPoint
-    let shoulderL: CGPoint
-    let shoulderR: CGPoint
-    let elbowL: CGPoint
-    let elbowR: CGPoint
-    let handL: CGPoint
-    let handR: CGPoint
-    let hip: CGPoint
-    let kneeL: CGPoint
-    let kneeR: CGPoint
-    let ankleL: CGPoint
-    let ankleR: CGPoint
-}
-
-// MARK: - Stick Figure Shape (draws lines between joints)
-private struct StickFigureShape: Shape {
-    var pose: StickPose
-
-    var animatableData: AnimatablePair<
-        AnimatablePair<AnimatablePair<CGPoint.AnimatableData, CGPoint.AnimatableData>,
-                       AnimatablePair<CGPoint.AnimatableData, CGPoint.AnimatableData>>,
-        AnimatablePair<AnimatablePair<CGPoint.AnimatableData, CGPoint.AnimatableData>,
-                       AnimatablePair<CGPoint.AnimatableData, CGPoint.AnimatableData>>
-    > {
-        get {
-            .init(
-                .init(.init(pose.head.animatableData, pose.shoulderL.animatableData),
-                      .init(pose.shoulderR.animatableData, pose.elbowL.animatableData)),
-                .init(.init(pose.hip.animatableData, pose.kneeL.animatableData),
-                      .init(pose.kneeR.animatableData, pose.ankleL.animatableData))
-            )
+// MARK: - LANDER Diamond Logo
+struct LanderDiamond: View {
+    var body: some View {
+        Path { path in
+            // Top-left triangle
+            path.move(to: CGPoint(x: 20, y: 2.5))
+            path.addLine(to: CGPoint(x: 5, y: 23.5))
+            path.addLine(to: CGPoint(x: 19.1, y: 23.5))
+            path.closeSubpath()
+            // Top-right triangle
+            path.move(to: CGPoint(x: 20, y: 2.5))
+            path.addLine(to: CGPoint(x: 35, y: 23.5))
+            path.addLine(to: CGPoint(x: 20.9, y: 23.5))
+            path.closeSubpath()
+            // Bottom-left triangle
+            path.move(to: CGPoint(x: 20, y: 49.5))
+            path.addLine(to: CGPoint(x: 5, y: 28.5))
+            path.addLine(to: CGPoint(x: 19.1, y: 28.5))
+            path.closeSubpath()
+            // Bottom-right triangle
+            path.move(to: CGPoint(x: 20, y: 49.5))
+            path.addLine(to: CGPoint(x: 35, y: 28.5))
+            path.addLine(to: CGPoint(x: 20.9, y: 28.5))
+            path.closeSubpath()
         }
-        set {
-            pose = StickPose(
-                head: CGPoint(x: newValue.first.first.first.first, y: newValue.first.first.first.second),
-                shoulderL: CGPoint(x: newValue.first.first.second.first, y: newValue.first.first.second.second),
-                shoulderR: CGPoint(x: newValue.first.second.first.first, y: newValue.first.second.first.second),
-                elbowL: CGPoint(x: newValue.first.second.second.first, y: newValue.first.second.second.second),
-                elbowR: CGPoint(x: pose.elbowR.x, y: pose.elbowR.y),
-                handL: CGPoint(x: pose.handL.x, y: pose.handL.y),
-                handR: CGPoint(x: pose.handR.x, y: pose.handR.y),
-                hip: CGPoint(x: newValue.second.first.first.first, y: newValue.second.first.first.second),
-                kneeL: CGPoint(x: newValue.second.first.second.first, y: newValue.second.first.second.second),
-                kneeR: CGPoint(x: newValue.second.second.first.first, y: newValue.second.second.first.second),
-                ankleL: CGPoint(x: newValue.second.second.second.first, y: newValue.second.second.second.second),
-                ankleR: CGPoint(x: pose.ankleR.x, y: pose.ankleR.y)
-            )
-        }
-    }
-
-    func path(in rect: CGRect) -> Path {
-        var path = Path()
-        let p = pose
-
-        // Spine: head -> mid-shoulders -> hip
-        let neckPoint = CGPoint(x: (p.shoulderL.x + p.shoulderR.x) / 2,
-                                y: (p.shoulderL.y + p.shoulderR.y) / 2)
-        path.move(to: CGPoint(x: p.head.x, y: p.head.y + 12))
-        path.addLine(to: neckPoint)
-        path.addLine(to: p.hip)
-
-        // Shoulders bar
-        path.move(to: p.shoulderL)
-        path.addLine(to: p.shoulderR)
-
-        // Left arm: shoulder -> elbow -> hand
-        path.move(to: p.shoulderL)
-        path.addLine(to: p.elbowL)
-        path.addLine(to: p.handL)
-
-        // Right arm: shoulder -> elbow -> hand
-        path.move(to: p.shoulderR)
-        path.addLine(to: p.elbowR)
-        path.addLine(to: p.handR)
-
-        // Left leg: hip -> knee -> ankle
-        path.move(to: p.hip)
-        path.addLine(to: p.kneeL)
-        path.addLine(to: p.ankleL)
-
-        // Right leg: hip -> knee -> ankle
-        path.move(to: p.hip)
-        path.addLine(to: p.kneeR)
-        path.addLine(to: p.ankleR)
-
-        return path
+        .fill(Color.brand)
     }
 }
 
