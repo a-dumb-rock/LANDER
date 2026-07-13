@@ -806,8 +806,8 @@ struct MainTabView: View {
     var body: some View {
         TabView {
             DashboardView().tabItem { Label("Home", systemImage: "house.fill") }
-            CaptureFlowView().tabItem { Label("Capture", systemImage: "camera.fill") }
             RosterView().tabItem { Label("Roster", systemImage: "person.3.fill") }
+            CaptureFlowView().tabItem { Label("Capture", systemImage: "camera.fill") }
             HistoryView().tabItem { Label("History", systemImage: "clock.fill") }
             SettingsView().tabItem { Label("Settings", systemImage: "gearshape.fill") }
         }
