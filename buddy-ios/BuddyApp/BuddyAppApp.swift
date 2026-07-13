@@ -10,8 +10,8 @@ import UserNotifications
 
 // MARK: - Color Theme
 extension Color {
-    static let brand = Color(red: 0.75, green: 1.0, blue: 0.0)
-    static let brandGlow = Color(red: 0.75, green: 1.0, blue: 0.0).opacity(0.4)
+    static let brand = Color(red: 0.776, green: 0.949, blue: 0.306)
+    static let brandGlow = Color(red: 0.776, green: 0.949, blue: 0.306).opacity(0.4)
     static let bgPrimary = Color(red: 0.04, green: 0.06, blue: 0.1)
     static let bgCard = Color(red: 0.08, green: 0.1, blue: 0.15)
     static let bgCardLight = Color(red: 0.12, green: 0.14, blue: 0.2)
@@ -352,98 +352,295 @@ struct BuddyAppApp: App {
 }
 
 
-// MARK: - Animated Splash
+// MARK: - Animated Splash (LANDER website-style stick figure landing sequence)
 struct AnimatedSplashView: View {
     @Environment(DataEngine.self) private var engine
-    @State private var logoScale: CGFloat = 0.3
-    @State private var glowRadius: CGFloat = 0
-    @State private var glowOpacity: Double = 0
-    @State private var line1Opacity: Double = 0
-    @State private var line2Opacity: Double = 0
-    @State private var line3Opacity: Double = 0
-    @State private var taglineOpacity: Double = 0
-    @State private var ringRotation: Double = 0
-    @State private var line1Offset: CGFloat = 20
-    @State private var line2Offset: CGFloat = 20
-    @State private var line3Offset: CGFloat = 20
+
+    // Animation phase: 0 = airborne, 1 = initial contact, 2 = deep landing
+    @State private var phase: Int = 0
+    @State private var showLogo: Bool = false
+    @State private var showTagline: Bool = false
+    @State private var kneeGlowIntensity: CGFloat = 8
+
+    // Joint positions for the stick figure (relative to a 200x400 canvas centered on screen)
+    // Pose 1: Airborne - hips high, arms up
+    private let pose1 = StickPose(
+        head: CGPoint(x: 100, y: 60),
+        shoulderL: CGPoint(x: 75, y: 100), shoulderR: CGPoint(x: 125, y: 100),
+        elbowL: CGPoint(x: 60, y: 70), elbowR: CGPoint(x: 140, y: 70),
+        handL: CGPoint(x: 50, y: 40), handR: CGPoint(x: 150, y: 40),
+        hip: CGPoint(x: 100, y: 170),
+        kneeL: CGPoint(x: 80, y: 220), kneeR: CGPoint(x: 120, y: 220),
+        ankleL: CGPoint(x: 75, y: 280), ankleR: CGPoint(x: 125, y: 280)
+    )
+
+    // Pose 2: Initial contact - hips lower, knees bending, arms coming down
+    private let pose2 = StickPose(
+        head: CGPoint(x: 100, y: 100),
+        shoulderL: CGPoint(x: 75, y: 140), shoulderR: CGPoint(x: 125, y: 140),
+        elbowL: CGPoint(x: 60, y: 170), elbowR: CGPoint(x: 140, y: 170),
+        handL: CGPoint(x: 55, y: 200), handR: CGPoint(x: 145, y: 200),
+        hip: CGPoint(x: 100, y: 220),
+        kneeL: CGPoint(x: 75, y: 280), kneeR: CGPoint(x: 125, y: 280),
+        ankleL: CGPoint(x: 70, y: 340), ankleR: CGPoint(x: 130, y: 340)
+    )
+
+    // Pose 3: Deep landing squat - hips very low, knees deeply bent (valgus-like)
+    private let pose3 = StickPose(
+        head: CGPoint(x: 100, y: 140),
+        shoulderL: CGPoint(x: 72, y: 180), shoulderR: CGPoint(x: 128, y: 180),
+        elbowL: CGPoint(x: 55, y: 220), elbowR: CGPoint(x: 145, y: 220),
+        handL: CGPoint(x: 50, y: 260), handR: CGPoint(x: 150, y: 260),
+        hip: CGPoint(x: 100, y: 270),
+        kneeL: CGPoint(x: 88, y: 320), kneeR: CGPoint(x: 112, y: 320),
+        ankleL: CGPoint(x: 70, y: 370), ankleR: CGPoint(x: 130, y: 370)
+    )
+
+    private var currentPose: StickPose {
+        switch phase {
+        case 0: return pose1
+        case 1: return pose2
+        default: return pose3
+        }
+    }
 
     var body: some View {
         ZStack {
-            Color.black.ignoresSafeArea()
-            // Subtle radial glow
-            RadialGradient(colors: [Color.brand.opacity(0.06), .clear], center: .center, startRadius: 0, endRadius: 300)
-                .ignoresSafeArea()
-            VStack(spacing: 24) {
-                Spacer()
-                // Logo with glow ring
-                ZStack {
-                    Circle()
-                        .stroke(Color.brand.opacity(glowOpacity), lineWidth: 2.5)
-                        .frame(width: 130, height: 130)
-                        .shadow(color: Color.brand.opacity(glowOpacity * 0.6), radius: glowRadius)
-                        .rotationEffect(.degrees(ringRotation))
-                    Image(systemName: "figure.run")
-                        .font(.system(size: 50, weight: .bold))
-                        .foregroundStyle(Color.brand)
-                        .shadow(color: Color.brandGlow, radius: glowRadius * 0.5)
-                        .scaleEffect(logoScale)
-                }
-                Spacer().frame(height: 20)
-                // Text animates in line by line (like landeracl.com "Spot an ACL tear before it happens")
-                VStack(alignment: .leading, spacing: 8) {
-                    Text("Spot an ACL tear")
-                        .font(.system(size: 32, weight: .bold))
-                        .foregroundStyle(.white)
-                        .opacity(line1Opacity)
-                        .offset(y: line1Offset)
-                    Text("before it")
-                        .font(.system(size: 32, weight: .bold))
-                        .foregroundStyle(Color.brand)
-                        .opacity(line2Opacity)
-                        .offset(y: line2Offset)
-                    Text("happens.")
-                        .font(.system(size: 32, weight: .bold))
-                        .foregroundStyle(Color.brand)
-                        .opacity(line3Opacity)
-                        .offset(y: line3Offset)
-                }.frame(maxWidth: .infinity, alignment: .leading).padding(.horizontal, 32)
+            // Dark background matching LANDER website (#0a0e14)
+            Color(red: 0.04, green: 0.055, blue: 0.078).ignoresSafeArea()
 
-                Text("Powered by LANDER computer vision")
-                    .font(.caption)
-                    .foregroundStyle(Color.textSecondary)
-                    .opacity(taglineOpacity)
-                    .padding(.top, 8)
+            VStack(spacing: 0) {
                 Spacer()
+
+                // Stick figure canvas
+                ZStack {
+                    // Draw the stick figure
+                    StickFigureShape(pose: currentPose)
+                        .stroke(Color.white.opacity(0.9), lineWidth: 3)
+                        .frame(width: 200, height: 400)
+
+                    // Head circle
+                    Circle()
+                        .fill(Color.white.opacity(0.9))
+                        .frame(width: 24, height: 24)
+                        .position(currentPose.head)
+                        .frame(width: 200, height: 400)
+
+                    // Left knee - GREEN GLOWING
+                    Circle()
+                        .fill(Color.brand)
+                        .frame(width: 14, height: 14)
+                        .shadow(color: Color.brand, radius: kneeGlowIntensity)
+                        .shadow(color: Color.brand.opacity(0.6), radius: kneeGlowIntensity * 1.5)
+                        .position(currentPose.kneeL)
+                        .frame(width: 200, height: 400)
+
+                    // Right knee - GREEN GLOWING
+                    Circle()
+                        .fill(Color.brand)
+                        .frame(width: 14, height: 14)
+                        .shadow(color: Color.brand, radius: kneeGlowIntensity)
+                        .shadow(color: Color.brand.opacity(0.6), radius: kneeGlowIntensity * 1.5)
+                        .position(currentPose.kneeR)
+                        .frame(width: 200, height: 400)
+
+                    // Other joint dots (subtle)
+                    ForEach(jointPositions, id: \.id) { joint in
+                        Circle()
+                            .fill(Color.white.opacity(0.5))
+                            .frame(width: 6, height: 6)
+                            .position(joint.point)
+                            .frame(width: 200, height: 400)
+                    }
+                }
+                .animation(.spring(response: 0.8, dampingFraction: 0.7), value: phase)
+
+                Spacer().frame(height: 30)
+
+                // LANDER logo + text (fades in after landing)
+                VStack(spacing: 10) {
+                    // Diamond/chevron logo
+                    Image(systemName: "diamond.fill")
+                        .font(.system(size: 28, weight: .bold))
+                        .foregroundStyle(Color.brand)
+                        .shadow(color: Color.brand.opacity(0.5), radius: 6)
+
+                    Text("LANDER")
+                        .font(.system(size: 36, weight: .black, design: .default))
+                        .foregroundStyle(.white)
+                        .tracking(4)
+
+                    Text("Catch ACL risk before it happens")
+                        .font(.system(size: 14, weight: .medium))
+                        .foregroundStyle(Color.white.opacity(0.6))
+                        .opacity(showTagline ? 1 : 0)
+                        .offset(y: showTagline ? 0 : 8)
+                }
+                .opacity(showLogo ? 1 : 0)
+                .scaleEffect(showLogo ? 1.0 : 0.9)
+                .animation(.easeOut(duration: 0.6), value: showLogo)
+                .animation(.easeOut(duration: 0.5).delay(0.3), value: showTagline)
+
+                Spacer()
+
+                // Skip intro button
+                HStack {
+                    Spacer()
+                    Button {
+                        withAnimation(.easeOut(duration: 0.3)) {
+                            engine.showSplash = false
+                        }
+                    } label: {
+                        Text("Skip intro →")
+                            .font(.system(size: 13, weight: .medium))
+                            .foregroundStyle(Color.white.opacity(0.4))
+                    }
+                    .padding(.trailing, 24)
+                    .padding(.bottom, 40)
+                }
             }
         }
         .onAppear {
-            withAnimation(.spring(response: 0.7, dampingFraction: 0.65)) {
-                logoScale = 1.0
+            // Pose 1 -> Pose 2 at 1.0s
+            DispatchQueue.main.asyncAfter(deadline: .now() + 1.0) {
+                phase = 1
+                withAnimation(.easeInOut(duration: 0.3)) {
+                    kneeGlowIntensity = 14
+                }
             }
-            withAnimation(.easeInOut(duration: 1.0).delay(0.2)) {
-                glowRadius = 16; glowOpacity = 0.6
+            // Pose 2 -> Pose 3 at 2.0s
+            DispatchQueue.main.asyncAfter(deadline: .now() + 2.0) {
+                phase = 2
+                withAnimation(.easeInOut(duration: 0.4)) {
+                    kneeGlowIntensity = 20
+                }
             }
-            withAnimation(.linear(duration: 2.5).delay(0.1)) {
-                ringRotation = 360
-            }
-            withAnimation(.easeOut(duration: 0.5).delay(0.4)) {
-                line1Opacity = 1.0; line1Offset = 0
-            }
-            withAnimation(.easeOut(duration: 0.5).delay(0.7)) {
-                line2Opacity = 1.0; line2Offset = 0
-            }
-            withAnimation(.easeOut(duration: 0.5).delay(1.0)) {
-                line3Opacity = 1.0; line3Offset = 0
-            }
-            withAnimation(.easeIn(duration: 0.4).delay(1.3)) {
-                taglineOpacity = 1.0
-            }
+            // Show logo at 2.5s
             DispatchQueue.main.asyncAfter(deadline: .now() + 2.5) {
+                showLogo = true
+                DispatchQueue.main.asyncAfter(deadline: .now() + 0.3) {
+                    showTagline = true
+                }
+            }
+            // Auto-dismiss at 3.5s
+            DispatchQueue.main.asyncAfter(deadline: .now() + 3.5) {
                 withAnimation(.spring(response: 0.4, dampingFraction: 0.75)) {
                     engine.showSplash = false
                 }
             }
         }
+    }
+
+    // Helper: non-knee joint positions for subtle dots
+    private var jointPositions: [JointPoint] {
+        let p = currentPose
+        return [
+            JointPoint(id: "sL", point: p.shoulderL),
+            JointPoint(id: "sR", point: p.shoulderR),
+            JointPoint(id: "eL", point: p.elbowL),
+            JointPoint(id: "eR", point: p.elbowR),
+            JointPoint(id: "hL", point: p.handL),
+            JointPoint(id: "hR", point: p.handR),
+            JointPoint(id: "hip", point: p.hip),
+            JointPoint(id: "aL", point: p.ankleL),
+            JointPoint(id: "aR", point: p.ankleR)
+        ]
+    }
+}
+
+// MARK: - Stick Figure Data Structures
+private struct JointPoint: Identifiable {
+    let id: String
+    let point: CGPoint
+}
+
+private struct StickPose {
+    let head: CGPoint
+    let shoulderL: CGPoint
+    let shoulderR: CGPoint
+    let elbowL: CGPoint
+    let elbowR: CGPoint
+    let handL: CGPoint
+    let handR: CGPoint
+    let hip: CGPoint
+    let kneeL: CGPoint
+    let kneeR: CGPoint
+    let ankleL: CGPoint
+    let ankleR: CGPoint
+}
+
+// MARK: - Stick Figure Shape (draws lines between joints)
+private struct StickFigureShape: Shape {
+    var pose: StickPose
+
+    var animatableData: AnimatablePair<
+        AnimatablePair<AnimatablePair<CGPoint.AnimatableData, CGPoint.AnimatableData>,
+                       AnimatablePair<CGPoint.AnimatableData, CGPoint.AnimatableData>>,
+        AnimatablePair<AnimatablePair<CGPoint.AnimatableData, CGPoint.AnimatableData>,
+                       AnimatablePair<CGPoint.AnimatableData, CGPoint.AnimatableData>>
+    > {
+        get {
+            .init(
+                .init(.init(pose.head.animatableData, pose.shoulderL.animatableData),
+                      .init(pose.shoulderR.animatableData, pose.elbowL.animatableData)),
+                .init(.init(pose.hip.animatableData, pose.kneeL.animatableData),
+                      .init(pose.kneeR.animatableData, pose.ankleL.animatableData))
+            )
+        }
+        set {
+            pose = StickPose(
+                head: CGPoint(x: newValue.first.first.first.first, y: newValue.first.first.first.second),
+                shoulderL: CGPoint(x: newValue.first.first.second.first, y: newValue.first.first.second.second),
+                shoulderR: CGPoint(x: newValue.first.second.first.first, y: newValue.first.second.first.second),
+                elbowL: CGPoint(x: newValue.first.second.second.first, y: newValue.first.second.second.second),
+                elbowR: CGPoint(x: pose.elbowR.x, y: pose.elbowR.y),
+                handL: CGPoint(x: pose.handL.x, y: pose.handL.y),
+                handR: CGPoint(x: pose.handR.x, y: pose.handR.y),
+                hip: CGPoint(x: newValue.second.first.first.first, y: newValue.second.first.first.second),
+                kneeL: CGPoint(x: newValue.second.first.second.first, y: newValue.second.first.second.second),
+                kneeR: CGPoint(x: newValue.second.second.first.first, y: newValue.second.second.first.second),
+                ankleL: CGPoint(x: newValue.second.second.second.first, y: newValue.second.second.second.second),
+                ankleR: CGPoint(x: pose.ankleR.x, y: pose.ankleR.y)
+            )
+        }
+    }
+
+    func path(in rect: CGRect) -> Path {
+        var path = Path()
+        let p = pose
+
+        // Spine: head -> mid-shoulders -> hip
+        let neckPoint = CGPoint(x: (p.shoulderL.x + p.shoulderR.x) / 2,
+                                y: (p.shoulderL.y + p.shoulderR.y) / 2)
+        path.move(to: CGPoint(x: p.head.x, y: p.head.y + 12))
+        path.addLine(to: neckPoint)
+        path.addLine(to: p.hip)
+
+        // Shoulders bar
+        path.move(to: p.shoulderL)
+        path.addLine(to: p.shoulderR)
+
+        // Left arm: shoulder -> elbow -> hand
+        path.move(to: p.shoulderL)
+        path.addLine(to: p.elbowL)
+        path.addLine(to: p.handL)
+
+        // Right arm: shoulder -> elbow -> hand
+        path.move(to: p.shoulderR)
+        path.addLine(to: p.elbowR)
+        path.addLine(to: p.handR)
+
+        // Left leg: hip -> knee -> ankle
+        path.move(to: p.hip)
+        path.addLine(to: p.kneeL)
+        path.addLine(to: p.ankleL)
+
+        // Right leg: hip -> knee -> ankle
+        path.move(to: p.hip)
+        path.addLine(to: p.kneeR)
+        path.addLine(to: p.ankleR)
+
+        return path
     }
 }
 
