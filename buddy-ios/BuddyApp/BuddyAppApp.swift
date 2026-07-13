@@ -914,9 +914,8 @@ struct OnboardingView: View {
             VStack(spacing: 28) {
                 Spacer()
                 VStack(spacing: 12) {
-                    Image(systemName: "figure.run")
-                        .font(.system(size: 72, weight: .bold))
-                        .foregroundStyle(Color.brand)
+                    LanderDiamond()
+                        .frame(width: 60, height: 78)
                         .shadow(color: Color.brandGlow, radius: 12)
                         .scaleEffect(logoScale)
                     Text("LANDER")
@@ -1582,9 +1581,14 @@ struct DashboardView: View {
             .navigationTitle("")
             .toolbar {
                 ToolbarItem(placement: .principal) {
-                    Text("Dashboard")
-                        .font(.system(size: 20, weight: .bold))
-                        .foregroundStyle(.white)
+                    HStack(spacing: 6) {
+                        LanderDiamond()
+                            .frame(width: 16, height: 21)
+                        Text("LANDER")
+                            .font(.system(size: 16, weight: .bold))
+                            .tracking(1.5)
+                            .foregroundStyle(.white)
+                    }
                 }
                 ToolbarItem(placement: .topBarLeading) {
                     NavigationLink(destination: ComparisonView()) {
@@ -2299,6 +2303,139 @@ struct GuidePoint: View {
 }
 
 
+// MARK: - Video Import Guide Sheet
+struct VideoImportGuideSheet: View {
+    let onContinue: () -> Void
+    let onCancel: () -> Void
+
+    var body: some View {
+        NavigationStack {
+            ZStack {
+                Color.bgPrimary.ignoresSafeArea()
+                
+                ScrollView {
+                    VStack(spacing: 24) {
+                        // Header
+                        VStack(spacing: 12) {
+                            Image(systemName: "video.badge.checkmark")
+                                .font(.system(size: 44))
+                                .foregroundStyle(Color.brand)
+                                .shadow(color: Color.brandGlow, radius: 8)
+                            
+                            Text("Video Requirements")
+                                .font(.title3.bold()).foregroundStyle(.white)
+                            
+                            Text("Make sure your video meets these requirements for accurate analysis.")
+                                .font(.subheadline).foregroundStyle(Color.textSecondary)
+                                .multilineTextAlignment(.center)
+                                .padding(.horizontal, 16)
+                        }
+                        .padding(.top, 16)
+                        
+                        // Requirements list
+                        VStack(spacing: 14) {
+                            ImportRequirement(
+                                icon: "figure.stand",
+                                title: "Full Body Visible",
+                                description: "Athlete must be fully in frame — head to feet — for the entire jump."
+                            )
+                            ImportRequirement(
+                                icon: "camera.viewfinder",
+                                title: "Front-Facing View",
+                                description: "Camera should face the athlete straight-on (not from the side)."
+                            )
+                            ImportRequirement(
+                                icon: "ruler",
+                                title: "8–10 Feet Distance",
+                                description: "Athlete should be about 8–10 feet from the camera."
+                            )
+                            ImportRequirement(
+                                icon: "light.max",
+                                title: "Good Lighting",
+                                description: "Well-lit environment. Avoid backlit or dark recordings."
+                            )
+                            ImportRequirement(
+                                icon: "hand.raised.slash",
+                                title: "Steady Camera",
+                                description: "No shaking — use a tripod or rest your phone against something."
+                            )
+                            ImportRequirement(
+                                icon: "figure.cooldown",
+                                title: "Drop Vertical Jump",
+                                description: "Video should show athlete stepping off a box, landing, then jumping vertically."
+                            )
+                        }
+                        .padding(.horizontal, 20)
+                        
+                        // Warning
+                        HStack(spacing: 10) {
+                            Image(systemName: "exclamationmark.triangle.fill")
+                                .foregroundStyle(Color.statusYellow)
+                            Text("Videos that don't meet these requirements may produce inaccurate results or be marked as 'Poor' quality.")
+                                .font(.caption).foregroundStyle(Color.textSecondary)
+                        }
+                        .padding(14)
+                        .background(Color.statusYellow.opacity(0.08))
+                        .cornerRadius(12)
+                        .padding(.horizontal, 20)
+                        
+                        // Continue button
+                        Button {
+                            Haptics.medium()
+                            onContinue()
+                        } label: {
+                            HStack {
+                                Image(systemName: "photo.on.rectangle")
+                                Text("Got It — Choose Video")
+                            }
+                            .font(.headline)
+                            .frame(maxWidth: .infinity).padding(16)
+                            .background(Color.brand)
+                            .foregroundStyle(.black)
+                            .cornerRadius(14)
+                        }
+                        .padding(.horizontal, 24)
+                        
+                        Spacer().frame(height: 20)
+                    }
+                }
+            }
+            .toolbar {
+                ToolbarItem(placement: .cancellationAction) {
+                    Button("Cancel") { onCancel() }
+                        .foregroundStyle(Color.textSecondary)
+                }
+            }
+        }
+        .presentationDetents([.large])
+    }
+}
+
+struct ImportRequirement: View {
+    let icon: String
+    let title: String
+    let description: String
+    
+    var body: some View {
+        HStack(alignment: .top, spacing: 14) {
+            Image(systemName: icon)
+                .font(.system(size: 18))
+                .foregroundStyle(Color.brand)
+                .frame(width: 28, height: 28)
+            VStack(alignment: .leading, spacing: 3) {
+                Text(title).font(.subheadline.bold()).foregroundStyle(.white)
+                Text(description).font(.caption).foregroundStyle(Color.textSecondary)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+            Spacer()
+        }
+        .padding(14)
+        .background(Color.bgCard)
+        .cornerRadius(12)
+    }
+}
+
+
 // MARK: - Camera Integration
 struct CameraView: UIViewControllerRepresentable {
     let sourceType: UIImagePickerController.SourceType
@@ -2356,6 +2493,7 @@ struct CaptureFlowView: View {
     @State private var sessionNotes = ""
     @State private var showCameraGuide = false
     @State private var cameraGuideAthleteID: UUID? = nil
+    @State private var showLibraryGuide = false
     @State private var showSuccessCelebration = false
     @State private var celebrationScale: CGFloat = 0.3
     @State private var celebrationOpacity: Double = 0
@@ -2438,6 +2576,20 @@ struct CaptureFlowView: View {
                     },
                     onCancel: {
                         showCameraGuide = false
+                    }
+                )
+            }
+            .sheet(isPresented: $showLibraryGuide) {
+                VideoImportGuideSheet(
+                    onContinue: {
+                        showLibraryGuide = false
+                        if let id = cameraGuideAthleteID {
+                            cameraSourceType = .photoLibrary
+                            showCameraFor = CameraSheetItem(id: id)
+                        }
+                    },
+                    onCancel: {
+                        showLibraryGuide = false
                     }
                 )
             }
@@ -2598,8 +2750,8 @@ struct CaptureFlowView: View {
                 }
                 Button("Choose from Library") {
                     if let id = actionSheetItemID {
-                        cameraSourceType = .photoLibrary
-                        showCameraFor = CameraSheetItem(id: id)
+                        cameraGuideAthleteID = id
+                        showLibraryGuide = true
                     }
                 }
                 Button("Cancel", role: .cancel) {}
