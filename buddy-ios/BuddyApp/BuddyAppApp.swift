@@ -77,6 +77,8 @@ struct Athlete: Identifiable, Codable {
     var sessions: [DataPoint]
     var photoData: Data?
     var injuryNotes: [String]? // e.g. ["ACL tear 2023", "Ankle sprain Week 3"]
+    var baselineLocked: Bool? // if true, baseline is frozen at current value
+    var lockedBaselineValue: Double? // the frozen baseline value
 }
 
 struct AthleteReadiness: Identifiable, Equatable {
@@ -329,7 +331,12 @@ class DataEngine {
     func readiness(for athlete: Athlete) -> AthleteReadiness {
         let fresh = athlete.sessions.filter(\.isFresh)
         let fatigued = athlete.sessions.filter { !$0.isFresh }
-        let baselineValgus = fresh.isEmpty ? 0 : fresh.map(\.value).reduce(0, +) / Double(fresh.count)
+        let baselineValgus: Double
+        if athlete.baselineLocked == true, let locked = athlete.lockedBaselineValue {
+            baselineValgus = locked
+        } else {
+            baselineValgus = fresh.isEmpty ? 0 : fresh.map(\.value).reduce(0, +) / Double(fresh.count)
+        }
         let latestFatigued = fatigued.last?.value ?? baselineValgus
         let degradation: Double = (fresh.count < 2 || baselineValgus == 0) ? 0 : ((latestFatigued - baselineValgus) / baselineValgus) * 100.0
 
@@ -414,6 +421,33 @@ class DataEngine {
     }
 
     func removeAthlete(_ id: UUID) { athletes.removeAll { $0.id == id }; save() }
+
+    func lockBaseline(athleteId: UUID) {
+        if let idx = athletes.firstIndex(where: { $0.id == athleteId }) {
+            let fresh = athletes[idx].sessions.filter(\.isFresh)
+            let baseline = fresh.isEmpty ? 0 : fresh.map(\.value).reduce(0, +) / Double(fresh.count)
+            athletes[idx].baselineLocked = true
+            athletes[idx].lockedBaselineValue = baseline
+            save()
+        }
+    }
+
+    func unlockBaseline(athleteId: UUID) {
+        if let idx = athletes.firstIndex(where: { $0.id == athleteId }) {
+            athletes[idx].baselineLocked = false
+            athletes[idx].lockedBaselineValue = nil
+            save()
+        }
+    }
+
+    func resetBaseline(athleteId: UUID) {
+        // Clear locked baseline and let rolling average recalculate
+        if let idx = athletes.firstIndex(where: { $0.id == athleteId }) {
+            athletes[idx].baselineLocked = false
+            athletes[idx].lockedBaselineValue = nil
+            save()
+        }
+    }
 
     func resetDemo() { athletes.removeAll(); loadDemoData() }
 
@@ -1272,6 +1306,8 @@ struct DashboardView: View {
     @State private var refreshID = UUID()
     @State private var showWalkthrough = false
     @State private var walkthroughStep = 1
+    @State private var filterStatus: AthleteStatus? = nil
+    @State private var filterPosition: String? = nil
 
     private var weekComparison: (thisWeek: Double, lastWeek: Double, improved: Bool) {
         let trend = engine.teamDeltaTrend
@@ -1358,9 +1394,39 @@ struct DashboardView: View {
                             .offset(y: trendAppeared ? 0 : 12)
                         }
 
+                        // Filter bar
+                        ScrollView(.horizontal, showsIndicators: false) {
+                            HStack(spacing: 8) {
+                                FilterChip(label: "All", active: filterStatus == nil && filterPosition == nil) {
+                                    filterStatus = nil; filterPosition = nil
+                                }
+                                FilterChip(label: "At Risk", active: filterStatus == .atRisk) {
+                                    filterStatus = (filterStatus == .atRisk) ? nil : .atRisk; filterPosition = nil
+                                }
+                                FilterChip(label: "Caution", active: filterStatus == .caution) {
+                                    filterStatus = (filterStatus == .caution) ? nil : .caution; filterPosition = nil
+                                }
+                                FilterChip(label: "Good", active: filterStatus == .good) {
+                                    filterStatus = (filterStatus == .good) ? nil : .good; filterPosition = nil
+                                }
+                                // Position filters
+                                let positions = Set(engine.athletes.map(\.position)).sorted()
+                                ForEach(positions, id: \.self) { pos in
+                                    FilterChip(label: pos, active: filterPosition == pos) {
+                                        filterPosition = (filterPosition == pos) ? nil : pos; filterStatus = nil
+                                    }
+                                }
+                            }.padding(.horizontal)
+                        }.padding(.vertical, 4)
+
                         // Athlete List
                         VStack(spacing: 10) {
-                            ForEach(engine.allReadiness) { r in
+                            let filteredReadiness = engine.allReadiness.filter { r in
+                                if let status = filterStatus { return r.status == status }
+                                if let pos = filterPosition { return r.position == pos }
+                                return true
+                            }
+                            ForEach(filteredReadiness) { r in
                                 NavigationLink(value: r.id) {
                                     AthleteRow(readiness: r)
                                 }.buttonStyle(CardPressStyle())
@@ -1392,6 +1458,11 @@ struct DashboardView: View {
                     Text("Dashboard")
                         .font(.system(size: 20, weight: .bold))
                         .foregroundStyle(.white)
+                }
+                ToolbarItem(placement: .topBarLeading) {
+                    NavigationLink(destination: ComparisonView()) {
+                        Image(systemName: "chart.line.text.clipboard").foregroundStyle(Color.brand)
+                    }
                 }
                 ToolbarItem(placement: .topBarTrailing) {
                     Button {
@@ -1751,6 +1822,71 @@ struct AthleteDetailView: View {
                     .padding(.horizontal)
                     .opacity(statsAppeared ? 1 : 0)
                     .animation(.easeOut(duration: 0.4).delay(0.5), value: statsAppeared)
+
+                    // Baseline Controls
+                    if let athlete = engine.athletes.first(where: { $0.id == athleteID }) {
+                        VStack(alignment: .leading, spacing: 10) {
+                            HStack {
+                                Text("Baseline").font(.subheadline.bold()).foregroundStyle(.white)
+                                Spacer()
+                                if athlete.baselineLocked == true {
+                                    HStack(spacing: 4) {
+                                        Image(systemName: "lock.fill").font(.caption)
+                                        Text("Locked").font(.caption.bold())
+                                    }.foregroundStyle(Color.brand)
+                                }
+                            }
+                            
+                            Text(athlete.baselineLocked == true 
+                                 ? "Baseline locked at \(String(format: "%.1f°", athlete.lockedBaselineValue ?? 0)). Comparisons use this fixed value."
+                                 : "Baseline is rolling average of last fresh sessions.")
+                                .font(.caption).foregroundStyle(Color.textSecondary)
+                            
+                            HStack(spacing: 10) {
+                                if athlete.baselineLocked == true {
+                                    Button {
+                                        Haptics.medium()
+                                        engine.unlockBaseline(athleteId: athleteID)
+                                    } label: {
+                                        Text("Unlock").font(.caption.bold())
+                                            .padding(.horizontal, 14).padding(.vertical, 8)
+                                            .background(Color.bgCardLight).foregroundStyle(.white)
+                                            .cornerRadius(8)
+                                    }
+                                } else {
+                                    Button {
+                                        Haptics.medium()
+                                        engine.lockBaseline(athleteId: athleteID)
+                                    } label: {
+                                        HStack(spacing: 4) {
+                                            Image(systemName: "lock.fill").font(.caption2)
+                                            Text("Lock Baseline").font(.caption.bold())
+                                        }
+                                        .padding(.horizontal, 14).padding(.vertical, 8)
+                                        .background(Color.brand.opacity(0.15)).foregroundStyle(Color.brand)
+                                        .cornerRadius(8)
+                                    }
+                                }
+                                
+                                Button {
+                                    Haptics.medium()
+                                    engine.unlockBaseline(athleteId: athleteID)
+                                } label: {
+                                    HStack(spacing: 4) {
+                                        Image(systemName: "arrow.counterclockwise").font(.caption2)
+                                        Text("Reset").font(.caption.bold())
+                                    }
+                                    .padding(.horizontal, 14).padding(.vertical, 8)
+                                    .background(Color.bgCardLight).foregroundStyle(Color.textSecondary)
+                                    .cornerRadius(8)
+                                }
+                            }
+                        }
+                        .padding(16)
+                        .background(Color.bgCard)
+                        .cornerRadius(14)
+                        .padding(.horizontal)
+                    }
 
                     // Session History
                     VStack(alignment: .leading, spacing: 10) {
@@ -2136,6 +2272,12 @@ struct CaptureFlowView: View {
     }
 
     private func checkCameraAndRecord(for id: UUID) {
+        guard UIImagePickerController.isSourceTypeAvailable(.camera) else {
+            // Fallback to photo library on simulator
+            cameraSourceType = .photoLibrary
+            showCameraFor = CameraSheetItem(id: id)
+            return
+        }
         let status = AVCaptureDevice.authorizationStatus(for: .video)
         switch status {
         case .authorized:
@@ -2144,8 +2286,8 @@ struct CaptureFlowView: View {
         case .notDetermined:
             AVCaptureDevice.requestAccess(for: .video) { granted in
                 DispatchQueue.main.async {
-                    if granted { cameraSourceType = .camera; showCameraFor = CameraSheetItem(id: id) }
-                    else { cameraPermissionDenied = true }
+                    if granted { self.cameraSourceType = .camera; self.showCameraFor = CameraSheetItem(id: id) }
+                    else { self.cameraPermissionDenied = true }
                 }
             }
         default:
@@ -2885,7 +3027,7 @@ struct SettingsView: View {
                         // About
                         SettingsSection(title: "ABOUT") {
                             SettingsRow(icon: "info.circle", label: "Version") {
-                                Text("3.2.0").foregroundStyle(Color.textSecondary)
+                                Text("3.3.0").foregroundStyle(Color.textSecondary)
                             }
                             SettingsRow(icon: "hammer", label: "Build") {
                                 Text("2025.07").foregroundStyle(Color.textSecondary)
@@ -2934,6 +3076,174 @@ struct SettingsView: View {
                     engine.hasCompletedOnboarding = false
                 }
             } message: { Text("You'll need to sign in again to access your data.") }
+        }
+    }
+}
+
+
+// MARK: - Multi-Athlete Comparison View
+struct ComparisonView: View {
+    @Environment(DataEngine.self) private var engine
+    @State private var selectedIDs: Set<UUID> = []
+    @State private var showChart = false
+    
+    private let compareColors: [Color] = [.brand, Color(red: 0.3, green: 0.6, blue: 1.0), Color.statusRed, Color.statusYellow]
+    
+    var body: some View {
+        ScrollView {
+            VStack(spacing: 18) {
+                // Selection
+                VStack(alignment: .leading, spacing: 10) {
+                    Text("SELECT ATHLETES TO COMPARE").font(.system(size: 11, weight: .bold)).tracking(1).foregroundStyle(Color.textSecondary)
+                    Text("Choose 2-3 athletes").font(.caption).foregroundStyle(Color.textSecondary)
+                    
+                    ForEach(engine.athletes) { a in
+                        Button {
+                            Haptics.light()
+                            if selectedIDs.contains(a.id) { selectedIDs.remove(a.id) }
+                            else if selectedIDs.count < 3 { selectedIDs.insert(a.id) }
+                        } label: {
+                            HStack(spacing: 12) {
+                                JerseyCircle(number: a.jersey, size: 36)
+                                Text(a.name).foregroundStyle(.white).lineLimit(1)
+                                Spacer()
+                                if selectedIDs.contains(a.id) {
+                                    Image(systemName: "checkmark.circle.fill").foregroundStyle(Color.brand)
+                                } else {
+                                    Image(systemName: "circle").foregroundStyle(Color.textSecondary.opacity(0.4))
+                                }
+                            }.padding(12).background(Color.bgCard).cornerRadius(12)
+                        }
+                    }
+                }.padding(.horizontal)
+                
+                if selectedIDs.count >= 2 {
+                    // Comparison Charts
+                    VStack(alignment: .leading, spacing: 14) {
+                        Text("FATIGUE DELTA COMPARISON").font(.system(size: 11, weight: .bold)).tracking(1).foregroundStyle(Color.textSecondary)
+                        
+                        // Overlay chart: multiple lines on same axes
+                        ComparisonChartView(
+                            athletes: engine.athletes.filter { selectedIDs.contains($0.id) },
+                            engine: engine,
+                            colors: compareColors
+                        ).frame(height: 180)
+                        
+                        // Legend
+                        HStack(spacing: 16) {
+                            ForEach(Array(engine.athletes.filter { selectedIDs.contains($0.id) }.enumerated()), id: \.element.id) { idx, a in
+                                HStack(spacing: 4) {
+                                    Circle().fill(compareColors[idx % compareColors.count]).frame(width: 8, height: 8)
+                                    Text(a.name.components(separatedBy: " ").first ?? a.name)
+                                        .font(.caption).foregroundStyle(.white)
+                                }
+                            }
+                        }
+                        
+                        // Stats comparison table
+                        VStack(spacing: 8) {
+                            HStack {
+                                Text("Athlete").font(.caption.bold()).foregroundStyle(Color.textSecondary).frame(width: 80, alignment: .leading)
+                                Text("Degradation").font(.caption.bold()).foregroundStyle(Color.textSecondary).frame(maxWidth: .infinity)
+                                Text("Trend").font(.caption.bold()).foregroundStyle(Color.textSecondary).frame(width: 80)
+                                Text("Status").font(.caption.bold()).foregroundStyle(Color.textSecondary).frame(width: 60)
+                            }.padding(.horizontal, 12)
+                            
+                            ForEach(engine.athletes.filter { selectedIDs.contains($0.id) }) { a in
+                                let r = engine.readiness(for: a)
+                                HStack {
+                                    Text(a.name.components(separatedBy: " ").first ?? "").font(.caption).foregroundStyle(.white).frame(width: 80, alignment: .leading)
+                                    Text("\(Int(r.fatigueDegradationPct))%").font(.caption.bold())
+                                        .foregroundStyle(r.status == .atRisk ? Color.statusRed : r.status == .caution ? Color.statusYellow : Color.statusGreen)
+                                        .frame(maxWidth: .infinity)
+                                    TrendBadge(trend: r.trend).frame(width: 80)
+                                    StatusBadge(status: r.status).frame(width: 60)
+                                }.padding(.horizontal, 12).padding(.vertical, 6)
+                            }
+                        }
+                        .padding(12).background(Color.bgCard).cornerRadius(12)
+                    }.padding(.horizontal)
+                    .transition(.opacity.combined(with: .move(edge: .bottom)))
+                    .animation(.easeOut(duration: 0.3), value: selectedIDs.count)
+                }
+            }.padding(.vertical)
+        }
+        .background(Color.bgPrimary)
+        .navigationTitle("Compare")
+    }
+}
+
+// Multi-line comparison chart
+struct ComparisonChartView: View {
+    let athletes: [Athlete]
+    let engine: DataEngine
+    let colors: [Color]
+    
+    var body: some View {
+        GeometryReader { geo in
+            let allDeltas = athletes.map { a -> [DataPoint] in
+                let r = engine.readiness(for: a)
+                return r.deltaHistory
+            }
+            let allValues = allDeltas.flatMap { $0.map(\.value) }
+            let mn = (allValues.min() ?? 0) - 1
+            let mx = (allValues.max() ?? 1) + 1
+            let range = mx - mn == 0 ? 1 : mx - mn
+            let h = geo.size.height
+            let w = geo.size.width
+            
+            ZStack {
+                // Background
+                RoundedRectangle(cornerRadius: 8).fill(Color.bgCard)
+                
+                // Y-axis labels
+                VStack {
+                    Text(String(format: "%.0f%%", mx)).font(.system(size: 8)).foregroundStyle(Color.textSecondary)
+                    Spacer()
+                    Text(String(format: "%.0f%%", mn)).font(.system(size: 8)).foregroundStyle(Color.textSecondary)
+                }.frame(width: 28).position(x: 14, y: h/2)
+                
+                // Zero line
+                if mn < 0 && mx > 0 {
+                    let zeroY = h * (1 - CGFloat((0 - mn) / range))
+                    Path { p in p.move(to: CGPoint(x: 30, y: zeroY)); p.addLine(to: CGPoint(x: w - 8, y: zeroY)) }
+                        .stroke(Color.textSecondary.opacity(0.3), style: StrokeStyle(lineWidth: 1, dash: [4, 3]))
+                }
+                
+                // Lines for each athlete
+                ForEach(Array(allDeltas.enumerated()), id: \.offset) { idx, deltas in
+                    if deltas.count > 1 {
+                        let color = colors[idx % colors.count]
+                        Path { path in
+                            for (i, dp) in deltas.enumerated() {
+                                let x = 30 + (w - 38) * CGFloat(i) / CGFloat(max(deltas.count - 1, 1))
+                                let y = h * (1 - CGFloat((dp.value - mn) / range))
+                                if i == 0 { path.move(to: CGPoint(x: x, y: y)) }
+                                else { path.addLine(to: CGPoint(x: x, y: y)) }
+                            }
+                        }.stroke(color, lineWidth: 2.5)
+                    }
+                }
+            }
+        }
+        .clipShape(RoundedRectangle(cornerRadius: 12))
+    }
+}
+
+
+// MARK: - Filter Chip
+struct FilterChip: View {
+    let label: String
+    let active: Bool
+    let action: () -> Void
+    var body: some View {
+        Button(action: { Haptics.light(); action() }) {
+            Text(label).font(.caption.bold())
+                .padding(.horizontal, 12).padding(.vertical, 7)
+                .background(active ? Color.brand.opacity(0.2) : Color.bgCard)
+                .foregroundStyle(active ? Color.brand : Color.textSecondary)
+                .clipShape(Capsule())
+                .overlay(Capsule().stroke(active ? Color.brand : Color.bgCardLight, lineWidth: 1))
         }
     }
 }
