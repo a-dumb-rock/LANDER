@@ -358,56 +358,87 @@ struct AnimatedSplashView: View {
     @State private var logoScale: CGFloat = 0.3
     @State private var glowRadius: CGFloat = 0
     @State private var glowOpacity: Double = 0
-    @State private var landerOpacity: Double = 0
-    @State private var buddyOpacity: Double = 0
+    @State private var line1Opacity: Double = 0
+    @State private var line2Opacity: Double = 0
+    @State private var line3Opacity: Double = 0
+    @State private var taglineOpacity: Double = 0
     @State private var ringRotation: Double = 0
+    @State private var line1Offset: CGFloat = 20
+    @State private var line2Offset: CGFloat = 20
+    @State private var line3Offset: CGFloat = 20
 
     var body: some View {
         ZStack {
             Color.black.ignoresSafeArea()
-            VStack(spacing: 16) {
+            // Subtle radial glow
+            RadialGradient(colors: [Color.brand.opacity(0.06), .clear], center: .center, startRadius: 0, endRadius: 300)
+                .ignoresSafeArea()
+            VStack(spacing: 24) {
+                Spacer()
+                // Logo with glow ring
                 ZStack {
-                    // Pulsing glow ring
                     Circle()
-                        .stroke(Color.brand.opacity(glowOpacity), lineWidth: 3)
-                        .frame(width: 120, height: 120)
-                        .shadow(color: Color.brand.opacity(glowOpacity * 0.8), radius: glowRadius)
+                        .stroke(Color.brand.opacity(glowOpacity), lineWidth: 2.5)
+                        .frame(width: 130, height: 130)
+                        .shadow(color: Color.brand.opacity(glowOpacity * 0.6), radius: glowRadius)
                         .rotationEffect(.degrees(ringRotation))
-                    // Logo icon
                     Image(systemName: "figure.run")
-                        .font(.system(size: 54, weight: .bold))
+                        .font(.system(size: 50, weight: .bold))
                         .foregroundStyle(Color.brand)
-                        .shadow(color: Color.brandGlow, radius: glowRadius)
+                        .shadow(color: Color.brandGlow, radius: glowRadius * 0.5)
                         .scaleEffect(logoScale)
                 }
-                Text("LANDER")
-                    .font(.system(size: 38, weight: .black, design: .default))
-                    .foregroundStyle(.white)
-                    .opacity(landerOpacity)
-                Text("BUDDY")
-                    .font(.system(size: 18, weight: .semibold, design: .default))
-                    .foregroundStyle(Color.brand)
-                    .opacity(buddyOpacity)
-                    .shadow(color: Color.brandGlow, radius: 4)
+                Spacer().frame(height: 20)
+                // Text animates in line by line (like landeracl.com "Spot an ACL tear before it happens")
+                VStack(alignment: .leading, spacing: 8) {
+                    Text("Spot an ACL tear")
+                        .font(.system(size: 32, weight: .bold))
+                        .foregroundStyle(.white)
+                        .opacity(line1Opacity)
+                        .offset(y: line1Offset)
+                    Text("before it")
+                        .font(.system(size: 32, weight: .bold))
+                        .foregroundStyle(Color.brand)
+                        .opacity(line2Opacity)
+                        .offset(y: line2Offset)
+                    Text("happens.")
+                        .font(.system(size: 32, weight: .bold))
+                        .foregroundStyle(Color.brand)
+                        .opacity(line3Opacity)
+                        .offset(y: line3Offset)
+                }.frame(maxWidth: .infinity, alignment: .leading).padding(.horizontal, 32)
+
+                Text("Powered by LANDER computer vision")
+                    .font(.caption)
+                    .foregroundStyle(Color.textSecondary)
+                    .opacity(taglineOpacity)
+                    .padding(.top, 8)
+                Spacer()
             }
         }
         .onAppear {
-            withAnimation(.spring(response: 0.6, dampingFraction: 0.6)) {
+            withAnimation(.spring(response: 0.7, dampingFraction: 0.65)) {
                 logoScale = 1.0
             }
-            withAnimation(.easeInOut(duration: 0.8).delay(0.2)) {
-                glowRadius = 20; glowOpacity = 0.7
+            withAnimation(.easeInOut(duration: 1.0).delay(0.2)) {
+                glowRadius = 16; glowOpacity = 0.6
             }
-            withAnimation(.linear(duration: 2.0).delay(0.1)) {
+            withAnimation(.linear(duration: 2.5).delay(0.1)) {
                 ringRotation = 360
             }
-            withAnimation(.easeIn(duration: 0.4).delay(0.5)) {
-                landerOpacity = 1.0
+            withAnimation(.easeOut(duration: 0.5).delay(0.4)) {
+                line1Opacity = 1.0; line1Offset = 0
             }
-            withAnimation(.easeIn(duration: 0.4).delay(0.8)) {
-                buddyOpacity = 1.0
+            withAnimation(.easeOut(duration: 0.5).delay(0.7)) {
+                line2Opacity = 1.0; line2Offset = 0
             }
-            DispatchQueue.main.asyncAfter(deadline: .now() + 2.0) {
+            withAnimation(.easeOut(duration: 0.5).delay(1.0)) {
+                line3Opacity = 1.0; line3Offset = 0
+            }
+            withAnimation(.easeIn(duration: 0.4).delay(1.3)) {
+                taglineOpacity = 1.0
+            }
+            DispatchQueue.main.asyncAfter(deadline: .now() + 2.5) {
                 withAnimation(.spring(response: 0.4, dampingFraction: 0.75)) {
                     engine.showSplash = false
                 }
@@ -940,7 +971,14 @@ struct DashboardView: View {
             }
             .refreshable { engine.resetDemo() }
             .background(Color.bgPrimary)
-            .navigationTitle("Dashboard")
+            .navigationTitle("")
+            .toolbar {
+                ToolbarItem(placement: .principal) {
+                    Text("Dashboard")
+                        .font(.system(size: 20, weight: .bold))
+                        .foregroundStyle(.white)
+                }
+            }
             .navigationDestination(for: UUID.self) { id in
                 AthleteDetailView(athleteID: id)
             }
