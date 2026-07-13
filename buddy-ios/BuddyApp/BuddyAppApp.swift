@@ -57,6 +57,13 @@ struct ModelMetrics {
     var lessScore: Int
 }
 
+enum CaptureQuality {
+    case good, fair, poor
+    var label: String { switch self { case .good: return "Good Capture"; case .fair: return "Fair — Review"; case .poor: return "Poor — Retake" } }
+    var icon: String { switch self { case .good: return "checkmark.circle.fill"; case .fair: return "exclamationmark.circle.fill"; case .poor: return "xmark.circle.fill" } }
+    var color: Color { switch self { case .good: return .statusGreen; case .fair: return .statusYellow; case .poor: return .statusRed } }
+}
+
 struct CaptureItem: Identifiable {
     let id: UUID
     var name: String
@@ -66,6 +73,7 @@ struct CaptureItem: Identifiable {
     var processing: Bool = false
     var done: Bool = false
     var resultMetrics: ModelMetrics?
+    var captureQuality: CaptureQuality?
 }
 
 
@@ -455,6 +463,44 @@ class DataEngine {
         UNUserNotificationCenter.current().requestAuthorization(options: [.alert, .sound, .badge]) { granted, _ in
             DispatchQueue.main.async { self.notificationsEnabled = granted }
         }
+    }
+
+    var lastCaptureDate: Date? {
+        athletes.flatMap(\.sessions).map(\.date).max()
+    }
+
+    var daysSinceLastCapture: Int {
+        guard let last = lastCaptureDate else { return 999 }
+        return Calendar.current.dateComponents([.day], from: last, to: Date()).day ?? 0
+    }
+
+    var captureOverdue: Bool { daysSinceLastCapture > 4 }
+
+    func scheduleWeeklyReminders() {
+        guard notificationsEnabled else { return }
+        UNUserNotificationCenter.current().removePendingNotificationRequests(withIdentifiers: ["fresh_reminder", "fatigued_reminder"])
+        
+        // Monday reminder for fresh capture
+        let freshContent = UNMutableNotificationContent()
+        freshContent.title = "Fresh Capture Day"
+        freshContent.body = "It's Monday — time for fresh baseline captures before practice."
+        freshContent.sound = .default
+        var freshComponents = DateComponents()
+        freshComponents.weekday = 2 // Monday
+        freshComponents.hour = 9
+        let freshTrigger = UNCalendarNotificationTrigger(dateMatching: freshComponents, repeats: true)
+        UNUserNotificationCenter.current().add(UNNotificationRequest(identifier: "fresh_reminder", content: freshContent, trigger: freshTrigger))
+        
+        // Wednesday reminder for fatigued capture
+        let fatContent = UNMutableNotificationContent()
+        fatContent.title = "Fatigued Capture Day"
+        fatContent.body = "It's Wednesday — time for post-practice fatigued captures."
+        fatContent.sound = .default
+        var fatComponents = DateComponents()
+        fatComponents.weekday = 4 // Wednesday
+        fatComponents.hour = 16
+        let fatTrigger = UNCalendarNotificationTrigger(dateMatching: fatComponents, repeats: true)
+        UNUserNotificationCenter.current().add(UNNotificationRequest(identifier: "fatigued_reminder", content: fatContent, trigger: fatTrigger))
     }
 
     func scheduleAtRiskNotification(name: String, degradation: Int) {
@@ -921,6 +967,7 @@ struct TeamSetupView: View {
                     engine.userName = engine.storedCoachName
                     engine.sportType = selectedSport
                     engine.requestNotificationPermission()
+                    engine.scheduleWeeklyReminders()
                     engine.hasCompletedOnboarding = true
                     engine.showSplash = true
                 } label: {
@@ -1331,6 +1378,20 @@ struct DashboardView: View {
                             .opacity(heroAppeared ? 1 : 0)
                             .offset(y: heroAppeared ? 0 : 16)
 
+                        // Game Day Report card
+                        NavigationLink(destination: GameDayReportView()) {
+                            HStack(spacing: 12) {
+                                Image(systemName: "flag.checkered").font(.title3).foregroundStyle(Color.brand)
+                                VStack(alignment: .leading, spacing: 2) {
+                                    Text("Game Day Report").font(.subheadline.bold()).foregroundStyle(.white)
+                                    Text("Generate clearance report").font(.caption).foregroundStyle(Color.textSecondary)
+                                }
+                                Spacer()
+                                Image(systemName: "chevron.right").font(.caption).foregroundStyle(Color.textSecondary.opacity(0.5))
+                            }
+                            .padding(14).background(Color.bgCard).cornerRadius(14)
+                        }.padding(.horizontal)
+
                         // Weekly Comparison Card (#6)
                         let comp = weekComparison
                         if engine.teamDeltaTrend.count >= 2 {
@@ -1354,6 +1415,19 @@ struct DashboardView: View {
                             .background(Color.bgCard)
                             .cornerRadius(14)
                             .padding(.horizontal)
+                        }
+
+                        // Capture Overdue Reminder
+                        if engine.captureOverdue {
+                            HStack(spacing: 10) {
+                                Image(systemName: "clock.badge.exclamationmark").font(.title3).foregroundStyle(Color.statusYellow)
+                                VStack(alignment: .leading, spacing: 2) {
+                                    Text("Capture Overdue").font(.caption.bold()).foregroundStyle(.white)
+                                    Text("\(engine.daysSinceLastCapture) days since last session — data gaps weaken trend accuracy.").font(.caption2).foregroundStyle(Color.textSecondary)
+                                }
+                                Spacer()
+                            }
+                            .padding(12).background(Color.statusYellow.opacity(0.1)).cornerRadius(12).padding(.horizontal)
                         }
 
                         // Alert Section: At Risk athletes
@@ -2516,6 +2590,17 @@ struct CaptureFlowView: View {
             Text(isFresh ? "Fresh baseline session recorded successfully." : "Fatigued session — showing delta vs baseline.")
                 .font(.caption).foregroundStyle(Color.textSecondary)
 
+            // Capture quality tip card
+            if captureItems.contains(where: { $0.captureQuality == .poor }) {
+                HStack(spacing: 8) {
+                    Image(systemName: "exclamationmark.triangle.fill").foregroundStyle(Color.statusYellow)
+                    VStack(alignment: .leading, spacing: 2) {
+                        Text("Some captures may have quality issues").font(.caption.bold()).foregroundStyle(.white)
+                        Text("Consider re-recording athletes marked 'Poor' for more accurate results.").font(.caption2).foregroundStyle(Color.textSecondary)
+                    }
+                }.padding(12).background(Color.statusYellow.opacity(0.1)).cornerRadius(10)
+            }
+
             ForEach(captureItems) { item in
                 if let m = item.resultMetrics {
                     VStack(alignment: .leading, spacing: 10) {
@@ -2530,6 +2615,16 @@ struct CaptureFlowView: View {
                                 MetricPill(label: "Delta", value: "+\(Int(delta))%",
                                     color: delta > 18 ? .statusRed : delta > 10 ? .statusYellow : .statusGreen)
                             }
+                        }
+                        // Capture quality indicator
+                        if let quality = item.captureQuality {
+                            HStack(spacing: 6) {
+                                Image(systemName: quality.icon).foregroundStyle(quality.color)
+                                Text(quality.label).font(.caption.bold()).foregroundStyle(quality.color)
+                                if quality == .poor {
+                                    Text("— athlete may not be fully visible").font(.caption2).foregroundStyle(Color.textSecondary)
+                                }
+                            }.padding(.top, 4)
                         }
                     }.padding(14).background(Color.bgCard).cornerRadius(12)
                 }
@@ -2564,6 +2659,9 @@ struct CaptureFlowView: View {
                     captureItems[i].processing = false
                     captureItems[i].done = true
                 }
+                // Simulate capture quality (real version would check frame completeness, brightness, etc.)
+                let qualityRoll = Double.random(in: 0...1)
+                captureItems[i].captureQuality = qualityRoll > 0.7 ? .good : qualityRoll > 0.3 ? .fair : .poor
                 // When CVModelService.useMock = false, this will call the real API
                 let valgus = Double.random(in: 5.5...10.5)
                 captureItems[i].resultMetrics = ModelMetrics(
@@ -3027,7 +3125,7 @@ struct SettingsView: View {
                         // About
                         SettingsSection(title: "ABOUT") {
                             SettingsRow(icon: "info.circle", label: "Version") {
-                                Text("3.3.0").foregroundStyle(Color.textSecondary)
+                                Text("3.4.0").foregroundStyle(Color.textSecondary)
                             }
                             SettingsRow(icon: "hammer", label: "Build") {
                                 Text("2025.07").foregroundStyle(Color.textSecondary)
@@ -3279,5 +3377,133 @@ struct SettingsRow<Accessory: View>: View {
             accessory
         }
         .padding(14)
+    }
+}
+
+
+// MARK: - Game Day Readiness Report
+struct GameDayReportView: View {
+    @Environment(DataEngine.self) private var engine
+    @State private var appeared = false
+    
+    var body: some View {
+        ScrollView {
+            VStack(spacing: 18) {
+                // Header
+                VStack(spacing: 8) {
+                    Image(systemName: "flag.checkered").font(.system(size: 36)).foregroundStyle(Color.brand)
+                    Text("GAME DAY READINESS").font(.system(size: 13, weight: .bold)).tracking(1.5).foregroundStyle(Color.textSecondary)
+                    Text(Date(), format: .dateTime.weekday(.wide).month(.wide).day().year()).font(.subheadline).foregroundStyle(.white)
+                    Text(engine.teamName).font(.headline).foregroundStyle(Color.brand)
+                }.padding(.top)
+                
+                // Team Score
+                HStack {
+                    VStack(alignment: .leading) {
+                        Text("Team Score").font(.caption).foregroundStyle(Color.textSecondary)
+                        Text("\(engine.teamScore)/100").font(.title.bold()).foregroundStyle(engine.teamScore >= 70 ? Color.statusGreen : engine.teamScore >= 50 ? Color.statusYellow : Color.statusRed)
+                    }
+                    Spacer()
+                    VStack(alignment: .trailing) {
+                        Text("Athletes Ready").font(.caption).foregroundStyle(Color.textSecondary)
+                        let ready = engine.allReadiness.filter { $0.status == .good || $0.status == .caution }
+                        Text("\(ready.count)/\(engine.athletes.count)").font(.title.bold()).foregroundStyle(Color.brand)
+                    }
+                }.padding(16).background(Color.bgCard).cornerRadius(14).padding(.horizontal)
+                
+                // Clearance Categories
+                VStack(alignment: .leading, spacing: 14) {
+                    // Full Go
+                    let fullGo = engine.allReadiness.filter { $0.status == .good }
+                    if !fullGo.isEmpty {
+                        ClearanceSection(title: "FULL GO", subtitle: "Normal game load", icon: "checkmark.shield.fill", color: .statusGreen, athletes: fullGo)
+                    }
+                    
+                    // Limited
+                    let limited = engine.allReadiness.filter { $0.status == .caution }
+                    if !limited.isEmpty {
+                        ClearanceSection(title: "LIMITED", subtitle: "Reduce high-impact minutes", icon: "exclamationmark.shield.fill", color: .statusYellow, athletes: limited)
+                    }
+                    
+                    // Do Not Play
+                    let doNotPlay = engine.allReadiness.filter { $0.status == .atRisk }
+                    if !doNotPlay.isEmpty {
+                        ClearanceSection(title: "DO NOT PLAY", subtitle: "Recommend rest", icon: "xmark.shield.fill", color: .statusRed, athletes: doNotPlay)
+                    }
+                }.padding(.horizontal)
+                
+                // Share button
+                Button {
+                    shareGameDayReport()
+                } label: {
+                    HStack {
+                        Image(systemName: "square.and.arrow.up")
+                        Text("Share Report")
+                    }
+                    .font(.headline).frame(maxWidth: .infinity).padding(15)
+                    .background(Color.brand).foregroundStyle(.black).cornerRadius(14)
+                }.padding(.horizontal)
+                
+                // Disclaimer
+                Text("This report is decision-support only. Clinical judgment should guide all return-to-play decisions.")
+                    .font(.caption2).foregroundStyle(Color.textSecondary).multilineTextAlignment(.center)
+                    .padding(.horizontal, 24).padding(.bottom)
+            }
+            .opacity(appeared ? 1 : 0)
+            .offset(y: appeared ? 0 : 12)
+        }
+        .background(Color.bgPrimary)
+        .navigationTitle("Game Day")
+        .onAppear { withAnimation(.easeOut(duration: 0.4)) { appeared = true } }
+    }
+    
+    private func shareGameDayReport() {
+        var report = "🏟 GAME DAY READINESS REPORT\n"
+        report += "Team: \(engine.teamName)\n"
+        report += "Date: \(Date().formatted(date: .long, time: .omitted))\n"
+        report += "Score: \(engine.teamScore)/100\n\n"
+        
+        let fullGo = engine.allReadiness.filter { $0.status == .good }
+        let limited = engine.allReadiness.filter { $0.status == .caution }
+        let doNotPlay = engine.allReadiness.filter { $0.status == .atRisk }
+        
+        report += "✅ FULL GO (\(fullGo.count)):\n"
+        for r in fullGo { report += "  • \(r.name) #\(r.jersey) — \(Int(r.fatigueDegradationPct))%\n" }
+        report += "\n⚠️ LIMITED (\(limited.count)):\n"
+        for r in limited { report += "  • \(r.name) #\(r.jersey) — \(Int(r.fatigueDegradationPct))% (\(r.recommendation))\n" }
+        report += "\n🚫 DO NOT PLAY (\(doNotPlay.count)):\n"
+        for r in doNotPlay { report += "  • \(r.name) #\(r.jersey) — \(Int(r.fatigueDegradationPct))% (\(r.recommendation))\n" }
+        report += "\n— Generated by LANDER Buddy"
+        
+        let av = UIActivityViewController(activityItems: [report], applicationActivities: nil)
+        if let scene = UIApplication.shared.connectedScenes.first as? UIWindowScene,
+           let root = scene.windows.first?.rootViewController {
+            root.present(av, animated: true)
+        }
+    }
+}
+
+struct ClearanceSection: View {
+    let title: String; let subtitle: String; let icon: String; let color: Color; let athletes: [AthleteReadiness]
+    var body: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            HStack(spacing: 8) {
+                Image(systemName: icon).foregroundStyle(color)
+                VStack(alignment: .leading, spacing: 1) {
+                    Text(title).font(.caption.bold()).foregroundStyle(color)
+                    Text(subtitle).font(.caption2).foregroundStyle(Color.textSecondary)
+                }
+                Spacer()
+                Text("\(athletes.count)").font(.headline).foregroundStyle(color)
+            }
+            ForEach(athletes) { r in
+                HStack(spacing: 10) {
+                    JerseyCircle(number: r.jersey, size: 30)
+                    Text(r.name).font(.caption).foregroundStyle(.white).lineLimit(1)
+                    Spacer()
+                    Text("\(Int(r.fatigueDegradationPct))%").font(.caption.bold()).foregroundStyle(color)
+                }
+            }
+        }.padding(14).background(Color.bgCard).cornerRadius(12)
     }
 }
