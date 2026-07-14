@@ -260,6 +260,7 @@
 				CURRENT_PROJECT_VERSION = 1;
 				DEVELOPMENT_TEAM = "";
 				GENERATE_INFOPLIST_FILE = YES;
+				INFOPLIST_FILE = BuddyApp/Info.plist;
 				INFOPLIST_KEY_NSCameraUsageDescription = "LANDER Buddy needs camera access to record landing videos for biomechanics analysis.";
 				INFOPLIST_KEY_NSMicrophoneUsageDescription = "LANDER Buddy needs microphone access to record audio with landing videos.";
 				INFOPLIST_KEY_NSPhotoLibraryUsageDescription = "LANDER Buddy needs photo library access to import landing videos for analysis.";
@@ -291,6 +292,7 @@
 				CURRENT_PROJECT_VERSION = 1;
 				DEVELOPMENT_TEAM = "";
 				GENERATE_INFOPLIST_FILE = YES;
+				INFOPLIST_FILE = BuddyApp/Info.plist;
 				INFOPLIST_KEY_NSCameraUsageDescription = "LANDER Buddy needs camera access to record landing videos for biomechanics analysis.";
 				INFOPLIST_KEY_NSMicrophoneUsageDescription = "LANDER Buddy needs microphone access to record audio with landing videos.";
 				INFOPLIST_KEY_NSPhotoLibraryUsageDescription = "LANDER Buddy needs photo library access to import landing videos for analysis.";

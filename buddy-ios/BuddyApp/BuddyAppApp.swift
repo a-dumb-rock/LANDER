@@ -142,8 +142,14 @@ struct PersistenceManager {
 
 // MARK: - CV Model Service
 enum CVModelService {
-    static let modelURL = "http://localhost:8000" // Change to real server URL
-    static let useMock = true // Set to false when real server is running
+    static var modelURL: String {
+        UserDefaults.standard.string(forKey: "serverURL") ?? "http://192.168.1.1:8000"
+    }
+    static var useMock: Bool {
+        // Use real server when URL is configured and not the default placeholder
+        let url = UserDefaults.standard.string(forKey: "serverURL") ?? ""
+        return url.isEmpty
+    }
     
     static func analyze(videoURL: URL?) async -> ModelMetrics {
         if useMock || videoURL == nil {
@@ -3523,11 +3529,20 @@ struct CaptureFlowView: View {
             let analysisDelay = Double(i) * 0.9 + 0.5
 
             if let videoURL = videoURL {
-                // Real on-device analysis with Vision framework
+                // Try LANDER server first (if configured), fall back to on-device Vision
                 Task {
                     try? await Task.sleep(for: .seconds(analysisDelay))
 
-                    let metrics = await VisionPoseAnalyzer.analyze(videoURL: videoURL)
+                    let metrics: ModelMetrics?
+                    if !CVModelService.useMock {
+                        // Use the real LANDER CV model via server API
+                        let serverResult = await CVModelService.analyze(videoURL: videoURL)
+                        // Server always returns something (mock fallback if server unreachable)
+                        metrics = serverResult
+                    } else {
+                        // On-device Vision framework analysis
+                        metrics = await VisionPoseAnalyzer.analyze(videoURL: videoURL)
+                    }
 
                     await MainActor.run {
                         withAnimation(.spring(response: 0.35, dampingFraction: 0.6)) {
@@ -4877,6 +4892,26 @@ struct SettingsView: View {
                             SettingsRow(icon: "sportscourt.fill", label: "Sport") {
                                 Text(engine.sportType).foregroundStyle(Color.textSecondary)
                             }
+                        }
+
+                        // Analysis Server
+                        SettingsSection(title: "ANALYSIS SERVER") {
+                            SettingsRow(icon: "server.rack", label: "Server URL") {
+                                TextField("http://192.168.x.x:8000", text: Binding(
+                                    get: { UserDefaults.standard.string(forKey: "serverURL") ?? "" },
+                                    set: { UserDefaults.standard.set($0, forKey: "serverURL") }
+                                ))
+                                .multilineTextAlignment(.trailing)
+                                .foregroundStyle(Color.brand)
+                                .font(.system(size: 12))
+                                .autocorrectionDisabled()
+                                .textInputAutocapitalization(.never)
+                            }
+                            HStack {
+                                Image(systemName: "info.circle").foregroundStyle(Color.textSecondary).frame(width: 24)
+                                Text("Enter your Mac's IP to use the LANDER CV model. Leave empty for on-device Vision analysis.")
+                                    .font(.caption2).foregroundStyle(Color.textSecondary)
+                            }.padding(.horizontal, 14).padding(.bottom, 10)
                         }
 
                         // Risk Thresholds
