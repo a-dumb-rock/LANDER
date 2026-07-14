@@ -1,4 +1,5 @@
 import SwiftUI
+import AuthenticationServices
 import AVFoundation
 import AVKit
 import UserNotifications
@@ -1251,7 +1252,7 @@ struct LanderDiamond: View {
 }
 
 
-// MARK: - Onboarding (Welcome)
+// MARK: - Onboarding (Sign In)
 struct OnboardingView: View {
     @Environment(DataEngine.self) private var engine
     @State private var logoScale: CGFloat = 0.8
@@ -1285,44 +1286,27 @@ struct OnboardingView: View {
 
                 Spacer()
 
-                // Action Buttons
+                // Sign In Buttons
                 VStack(spacing: 14) {
-                    // Primary: Get Started (clean slate)
-                    Button {
-                        Haptics.success()
-                        engine.isSignedIn = true
-                    } label: {
-                        Text("Get Started")
-                            .font(.headline)
-                            .frame(maxWidth: .infinity).frame(height: 52)
-                            .background(Color.brand)
-                            .foregroundStyle(.black)
-                            .cornerRadius(14)
+                    SignInWithAppleButton(.signIn) { _ in } onCompletion: { _ in
+                        triggerSignIn()
                     }
+                    .signInWithAppleButtonStyle(.white)
+                    .frame(height: 52)
+                    .cornerRadius(14)
                     .padding(.horizontal, 36)
 
-                    // Secondary: Try with demo data
-                    Button {
-                        Haptics.medium()
-                        engine.loadDemoData()
-                        engine.hasCompletedOnboarding = true
-                        engine.showSplash = true
-                        engine.isSignedIn = true
-                    } label: {
-                        Text("Explore with Demo Data")
-                            .font(.subheadline.bold())
-                            .frame(maxWidth: .infinity).frame(height: 52)
-                            .background(Color.bgCard)
-                            .foregroundStyle(.white)
-                            .cornerRadius(14)
-                            .overlay(
-                                RoundedRectangle(cornerRadius: 14)
-                                    .stroke(Color.bgCardLight, lineWidth: 1)
-                            )
-                    }
-                    .padding(.horizontal, 36)
+                    Button { triggerSignIn() } label: {
+                        HStack(spacing: 8) {
+                            Image(systemName: "g.circle.fill").font(.title3)
+                            Text("Continue with Google").font(.subheadline.bold())
+                        }
+                        .frame(maxWidth: .infinity).frame(height: 52)
+                        .background(Color.bgCard).cornerRadius(14)
+                        .foregroundStyle(.white)
+                    }.padding(.horizontal, 36)
 
-                    Text("No account needed — all data stays on your device")
+                    Text("Your data stays on your device")
                         .font(.caption2)
                         .foregroundStyle(Color.textSecondary.opacity(0.6))
                         .padding(.top, 4)
@@ -1336,6 +1320,12 @@ struct OnboardingView: View {
             withAnimation(.spring(response: 0.8, dampingFraction: 0.6)) { logoScale = 1.0 }
             withAnimation(.easeIn(duration: 0.5).delay(0.3)) { contentOpacity = 1.0 }
         }
+    }
+
+    private func triggerSignIn() {
+        Haptics.success()
+        engine.showSplash = true
+        engine.isSignedIn = true
     }
 }
 
@@ -3675,29 +3665,43 @@ struct RosterView: View {
                 if engine.athletes.isEmpty {
                     VStack(spacing: 18) {
                         Spacer()
-                        // 5. Better empty state with animated icon
                         Image(systemName: "figure.run.circle")
                             .font(.system(size: 64)).foregroundStyle(Color.brand.opacity(0.4))
                             .shadow(color: Color.brand.opacity(0.2), radius: 12)
                         Text("No athletes yet").font(.title3.bold()).foregroundStyle(.white)
-                        Text("Tap + above to add your first athlete\nand start tracking their landing mechanics")
+                        Text("Add your athletes to start tracking\ntheir landing mechanics")
                             .font(.subheadline)
                             .foregroundStyle(Color.textSecondary)
                             .multilineTextAlignment(.center)
                             .padding(.horizontal, 40)
+                        
+                        // Add athlete button
                         Button {
                             showingAdd = true
                         } label: {
                             HStack(spacing: 8) {
                                 Image(systemName: "plus.circle.fill")
-                                Text("Add First Athlete")
+                                Text("Add Athlete")
                             }
-                            .font(.subheadline.bold())
-                            .padding(.horizontal, 24).padding(.vertical, 12)
-                            .background(Color.brand.opacity(0.15))
-                            .foregroundStyle(Color.brand)
+                            .font(.headline)
+                            .frame(maxWidth: .infinity).padding(14)
+                            .background(Color.brand)
+                            .foregroundStyle(.black)
                             .cornerRadius(12)
                         }
+                        .padding(.horizontal, 40)
+
+                        // Or load demo data
+                        Button {
+                            Haptics.medium()
+                            engine.loadDemoData()
+                        } label: {
+                            Text("or load demo data to explore")
+                                .font(.caption)
+                                .foregroundStyle(Color.textSecondary)
+                                .underline()
+                        }
+                        
                         Spacer()
                     }
                 } else {
