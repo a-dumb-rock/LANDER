@@ -16,6 +16,9 @@ env/
 *.json
 *.png
 !docs/**/*.png
+!buddy-ios/**/*.json
+!buddy-ios/**/*.png
+!buddy-ios/**/*.storekit
 results/
 runs/
 
