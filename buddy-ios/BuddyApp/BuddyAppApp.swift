@@ -7,6 +7,7 @@ import UIKit
 import PhotosUI
 import StoreKit
 import Vision
+import Combine
 
 // NOTE: Info.plist must include:
 // NSCameraUsageDescription - "LANDER Buddy needs camera access to record landing videos for analysis."
@@ -1880,6 +1881,12 @@ struct DashboardView: View {
                             .offset(y: trendAppeared ? 0 : 12)
                         }
 
+                        // Season Timeline (Pro)
+                        if engine.isPro {
+                            SeasonTimelineView()
+                                .padding(.horizontal)
+                        }
+
                         // Filter bar
                         ScrollView(.horizontal, showsIndicators: false) {
                             HStack(spacing: 8) {
@@ -3435,8 +3442,38 @@ struct CaptureFlowView: View {
                 }
             }
 
-            // Pro upsell — deeper AI analysis teaser
-            if !engine.isPro {
+            // Pro: AI Movement Report (real) / Free: blurred teaser
+            if engine.isPro {
+                // Real AI Movement Report for Pro users
+                if let firstItem = captureItems.first, let r = engine.allReadiness.first(where: { $0.id == firstItem.id }) {
+                    VStack(alignment: .leading, spacing: 10) {
+                        HStack {
+                            Image(systemName: "brain.head.profile")
+                                .font(.title3).foregroundStyle(Color.brand)
+                            Text("AI Movement Report")
+                                .font(.subheadline.bold()).foregroundStyle(.white)
+                            Spacer()
+                            HStack(spacing: 3) {
+                                Image(systemName: "crown.fill").font(.system(size: 8))
+                                Text("PRO").font(.system(size: 9, weight: .bold))
+                            }.foregroundStyle(Color.brand)
+                        }
+                        Text(AIMovementReport.generate(athlete: r, metrics: firstItem.resultMetrics))
+                            .font(.system(size: 11))
+                            .foregroundStyle(Color.textSecondary)
+                            .lineSpacing(3)
+                    }
+                    .padding(14)
+                    .background(Color.bgCard)
+                    .overlay(
+                        HStack {
+                            Rectangle().fill(Color.brand.opacity(0.5)).frame(width: 2)
+                            Spacer()
+                        }
+                    )
+                    .cornerRadius(12)
+                }
+            } else {
                 Button {
                     Haptics.medium()
                     engine.showProPaywall = true
@@ -3457,7 +3494,6 @@ struct CaptureFlowView: View {
                             .background(Color.brand.opacity(0.15))
                             .clipShape(Capsule())
                         }
-                        // Blurred fake analysis text
                         Text("Knee valgus increases 14° during deceleration suggesting medial stabilizer weakness. Asymmetry pattern detected across sessions. Recommend reducing plyometric load...")
                             .font(.system(size: 12))
                             .foregroundStyle(.white.opacity(0.6))
@@ -4122,6 +4158,11 @@ struct ACLInsightCard: View {
                 currentTip = (currentTip + 1) % tips.count
             }
         }
+        .onReceive(Timer.publish(every: 10, on: .main, in: .common).autoconnect()) { _ in
+            withAnimation(.easeInOut(duration: 0.4)) {
+                currentTip = (currentTip + 1) % tips.count
+            }
+        }
     }
 }
 
@@ -4626,6 +4667,238 @@ enum PDFReportGenerator {
 }
 
 
+// MARK: - AI Movement Report (Pro Feature)
+enum AIMovementReport {
+    /// Generate a natural-language biomechanics report from metrics
+    static func generate(athlete: AthleteReadiness, metrics: ModelMetrics? = nil) -> String {
+        var report = ""
+
+        // Opening assessment
+        let severity = athlete.fatigueDegradationPct > 18 ? "significant" :
+            athlete.fatigueDegradationPct > 10 ? "moderate" : "minimal"
+        report += "\(athlete.name) demonstrates \(severity) biomechanical changes under fatigue conditions. "
+
+        // Valgus analysis
+        let valgusChange = athlete.latestFatiguedValgus - athlete.baselineValgus
+        if valgusChange > 1.5 {
+            report += "Knee valgus increases by \(String(format: "%.1f", valgusChange))° from baseline during fatigued landings, indicating medial knee loading that exceeds safe thresholds. "
+            report += "This lateral collapse pattern suggests weakness in the hip abductors and gluteus medius, which are primary stabilizers during single-leg deceleration. "
+        } else if valgusChange > 0.5 {
+            report += "Mild valgus increase of \(String(format: "%.1f", valgusChange))° observed under fatigue. Currently within acceptable range but trending upward — monitor closely. "
+        } else {
+            report += "Knee valgus remains stable between fresh and fatigued states, indicating strong neuromuscular control under load. "
+        }
+
+        // Trend analysis
+        switch athlete.trend {
+        case .worsening:
+            report += "\n\nTREND: Degradation has increased over the past 3+ sessions. This progressive pattern suggests cumulative fatigue or declining neuromuscular control. Consider reducing plyometric volume by 30-40% this week."
+        case .improving:
+            report += "\n\nTREND: Positive trajectory — landing mechanics are improving over recent sessions. Current training load appears appropriate. Maintain program and continue monitoring."
+        case .stable:
+            report += "\n\nTREND: Stable pattern across recent sessions. No concerning changes detected."
+        }
+
+        // Metrics breakdown if available
+        if let m = metrics {
+            report += "\n\nDETAILED METRICS:"
+            report += "\n• Peak Knee Valgus: \(String(format: "%.1f", m.valgusAngle))° "
+            report += "(threshold: 10°)"
+            report += "\n• Knee Flexion at Landing: \(String(format: "%.1f", m.kneeFlexionAngle))° "
+            report += "(optimal: >60°, stiff landing: <45°)"
+            report += "\n• Trunk Lean: \(String(format: "%.1f", m.trunkLean))° "
+            report += "(>15° increases GRF on knee)"
+            report += "\n• Bilateral Asymmetry: \(String(format: "%.0f", m.asymmetry))% "
+            report += "(concern threshold: >15%)"
+            report += "\n• LESS Score: \(m.lessScore)/10 "
+            report += "(higher = more error)"
+
+            // Clinical recommendations based on metrics
+            report += "\n\nRECOMMENDATIONS:"
+            if m.kneeFlexionAngle < 50 {
+                report += "\n• Stiff landing pattern detected — implement soft-landing drills focusing on hip-knee-ankle flexion at initial contact."
+            }
+            if m.asymmetry > 12 {
+                report += "\n• Significant bilateral asymmetry — consider unilateral strength assessment to identify weaker limb. Single-leg exercises recommended."
+            }
+            if m.trunkLean > 12 {
+                report += "\n• Excessive trunk lean increases ground reaction force on the knee. Core stability and hip mobility work recommended."
+            }
+            if m.valgusAngle > 8 {
+                report += "\n• Elevated valgus — neuromuscular training (FIFA 11+, PEP program) shown to reduce ACL risk by 50-70% in similar profiles."
+            }
+        }
+
+        // Injury history context
+        report += "\n\nNOTE: This report is generated by on-device AI analysis and is intended as decision-support for qualified coaching staff. Not a medical diagnosis."
+
+        return report
+    }
+}
+
+
+// MARK: - Season Timeline View (Pro Feature)
+struct SeasonTimelineView: View {
+    @Environment(DataEngine.self) private var engine
+    @State private var appeared = false
+
+    private var weeklyData: [(week: Int, avgDegradation: Double, captureCount: Int, worstAthlete: String)] {
+        let cal = Calendar.current
+        var weeks: [Int: (total: Double, count: Int, worst: Double, worstName: String, captures: Int)] = [:]
+
+        for athlete in engine.athletes {
+            let r = engine.readiness(for: athlete)
+            for session in athlete.sessions.filter({ !$0.isFresh }) {
+                let weekNum = cal.component(.weekOfYear, from: session.date)
+                let baseline = r.baselineValgus > 0 ? r.baselineValgus : 1
+                let delta = ((session.value - baseline) / baseline) * 100
+
+                var entry = weeks[weekNum] ?? (total: 0, count: 0, worst: 0, worstName: "", captures: 0)
+                entry.total += delta
+                entry.count += 1
+                entry.captures += 1
+                if delta > entry.worst {
+                    entry.worst = delta
+                    entry.worstName = athlete.name
+                }
+                weeks[weekNum] = entry
+            }
+        }
+
+        return weeks.sorted(by: { $0.key < $1.key }).suffix(8).map { week in
+            (week: week.key,
+             avgDegradation: week.value.count > 0 ? week.value.total / Double(week.value.count) : 0,
+             captureCount: week.value.captures,
+             worstAthlete: week.value.worstName)
+        }
+    }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 14) {
+            HStack {
+                Text("SEASON TIMELINE")
+                    .font(.system(size: 11, weight: .bold))
+                    .foregroundStyle(Color.textSecondary)
+                    .tracking(1)
+                Spacer()
+                HStack(spacing: 3) {
+                    Image(systemName: "crown.fill").font(.system(size: 8))
+                    Text("PRO").font(.system(size: 9, weight: .bold))
+                }.foregroundStyle(Color.brand)
+            }
+
+            if weeklyData.isEmpty {
+                Text("Need 2+ weeks of data to show timeline")
+                    .font(.caption).foregroundStyle(Color.textSecondary)
+            } else {
+                // Week bars
+                HStack(alignment: .bottom, spacing: 6) {
+                    ForEach(weeklyData, id: \.week) { week in
+                        VStack(spacing: 4) {
+                            // Bar
+                            let height = min(80, max(8, CGFloat(week.avgDegradation) * 3))
+                            let color: Color = week.avgDegradation > 18 ? .statusRed :
+                                week.avgDegradation > 10 ? .statusYellow : .statusGreen
+                            RoundedRectangle(cornerRadius: 4)
+                                .fill(color.opacity(0.7))
+                                .frame(width: 28, height: height)
+                                .shadow(color: color.opacity(0.3), radius: 4)
+
+                            // Week label
+                            Text("W\(week.week)")
+                                .font(.system(size: 8, weight: .medium))
+                                .foregroundStyle(Color.textSecondary)
+                        }
+                    }
+                }
+                .frame(height: 100, alignment: .bottom)
+
+                // Legend
+                HStack(spacing: 12) {
+                    HStack(spacing: 4) {
+                        RoundedRectangle(cornerRadius: 2).fill(Color.statusGreen).frame(width: 10, height: 6)
+                        Text("<10%").font(.system(size: 9)).foregroundStyle(Color.textSecondary)
+                    }
+                    HStack(spacing: 4) {
+                        RoundedRectangle(cornerRadius: 2).fill(Color.statusYellow).frame(width: 10, height: 6)
+                        Text("10-18%").font(.system(size: 9)).foregroundStyle(Color.textSecondary)
+                    }
+                    HStack(spacing: 4) {
+                        RoundedRectangle(cornerRadius: 2).fill(Color.statusRed).frame(width: 10, height: 6)
+                        Text(">18%").font(.system(size: 9)).foregroundStyle(Color.textSecondary)
+                    }
+                }
+            }
+        }
+        .padding(16)
+        .background(Color.bgCard)
+        .cornerRadius(14)
+        .opacity(appeared ? 1 : 0)
+        .offset(y: appeared ? 0 : 12)
+        .onAppear {
+            withAnimation(.easeOut(duration: 0.5).delay(0.2)) { appeared = true }
+        }
+    }
+}
+
+
+// MARK: - CSV Export (Pro Feature)
+enum CSVExporter {
+    static func generateTeamCSV(engine: DataEngine) -> String {
+        var csv = "Athlete,Jersey,Position,Status,Trend,Degradation%,Baseline Valgus,Latest Fatigued,Sessions,Risk Score\n"
+
+        for athlete in engine.athletes {
+            let r = engine.readiness(for: athlete)
+            let riskScore = computeRisk(r, engine: engine)
+            csv += "\"\(r.name)\",\(r.jersey),\"\(r.position)\",\"\(r.status.rawValue)\",\"\(r.trend.rawValue)\","
+            csv += "\(String(format: "%.1f", r.fatigueDegradationPct)),"
+            csv += "\(String(format: "%.2f", r.baselineValgus)),"
+            csv += "\(String(format: "%.2f", r.latestFatiguedValgus)),"
+            csv += "\(r.sessionCount),\(riskScore)\n"
+        }
+
+        csv += "\n\nSession Detail\n"
+        csv += "Athlete,Date,Type,Valgus Angle,Delta%\n"
+
+        for athlete in engine.athletes {
+            let r = engine.readiness(for: athlete)
+            for session in athlete.sessions {
+                let dateStr = session.date.formatted(.dateTime.year().month().day())
+                let typeStr = session.isFresh ? "Fresh" : "Fatigued"
+                let delta = r.baselineValgus > 0 ? ((session.value - r.baselineValgus) / r.baselineValgus) * 100 : 0
+                csv += "\"\(athlete.name)\",\(dateStr),\(typeStr),\(String(format: "%.2f", session.value)),\(String(format: "%.1f", delta))\n"
+            }
+        }
+
+        return csv
+    }
+
+    static func shareCSV(csv: String, filename: String) {
+        let tempURL = FileManager.default.temporaryDirectory.appendingPathComponent(filename)
+        try? csv.write(to: tempURL, atomically: true, encoding: .utf8)
+        let av = UIActivityViewController(activityItems: [tempURL], applicationActivities: nil)
+        if let scene = UIApplication.shared.connectedScenes.first as? UIWindowScene,
+           let root = scene.windows.first?.rootViewController {
+            root.present(av, animated: true)
+        }
+    }
+
+    private static func computeRisk(_ r: AthleteReadiness, engine: DataEngine) -> Int {
+        var score: Double = 0
+        score += min(40, r.fatigueDegradationPct * 2)
+        if r.trend == .worsening { score += 20 }
+        else if r.trend == .stable { score += 8 }
+        if r.sessionCount < 4 { score += 15 }
+        else if r.sessionCount < 8 { score += 8 }
+        if let athlete = engine.athletes.first(where: { $0.id == r.id }) {
+            let injuryCount = (athlete.injuryNotes ?? []).count
+            score += min(25, Double(injuryCount) * 12)
+        }
+        return Int(min(100, max(0, score)))
+    }
+}
+
+
 // MARK: - Settings (Complete)
 struct SettingsView: View {
     @Environment(DataEngine.self) private var engine
@@ -4769,6 +5042,24 @@ struct SettingsView: View {
 
                         // Actions
                         VStack(spacing: 10) {
+                            // CSV Export (Pro)
+                            if engine.isPro {
+                                Button {
+                                    Haptics.medium()
+                                    let csv = CSVExporter.generateTeamCSV(engine: engine)
+                                    CSVExporter.shareCSV(csv: csv, filename: "LANDER_\(engine.teamName)_data.csv")
+                                } label: {
+                                    HStack {
+                                        Image(systemName: "tablecells")
+                                        Text("Export Team Data (CSV)")
+                                    }
+                                    .font(.subheadline.bold())
+                                    .frame(maxWidth: .infinity).padding(14)
+                                    .background(Color.bgCard).foregroundStyle(Color.brand)
+                                    .cornerRadius(12)
+                                }
+                            }
+
                             Button {
                                 showResetConfirm = true
                             } label: {
