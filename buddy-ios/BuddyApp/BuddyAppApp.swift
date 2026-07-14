@@ -277,7 +277,7 @@ class SubscriptionManager {
     /// Check current entitlements
     @MainActor
     func checkEntitlements() async {
-        for await result in Transaction.currentEntitlements {
+        for await result in StoreKit.Transaction.currentEntitlements {
             if case .verified(let transaction) = result {
                 if transaction.productID == Self.proMonthlyID && !isTransactionExpired(transaction) {
                     isProActive = true
@@ -290,7 +290,7 @@ class SubscriptionManager {
 
     /// Listen for transaction updates (renewals, revocations)
     private func listenForTransactions() async {
-        for await result in Transaction.updates {
+        for await result in StoreKit.Transaction.updates {
             if case .verified(let transaction) = result {
                 await transaction.finish()
                 await MainActor.run {
@@ -310,7 +310,7 @@ class SubscriptionManager {
     enum StoreError: Error { case unverified }
 }
 
-private func isTransactionExpired(_ transaction: Transaction) -> Bool {
+private func isTransactionExpired(_ transaction: StoreKit.Transaction) -> Bool {
     guard let expirationDate = transaction.expirationDate else { return false }
     return expirationDate < Date()
 }
