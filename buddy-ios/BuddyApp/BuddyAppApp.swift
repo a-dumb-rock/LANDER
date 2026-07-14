@@ -2383,6 +2383,66 @@ struct AthleteDetailView: View {
                     .opacity(statsAppeared ? 1 : 0)
                     .animation(.easeOut(duration: 0.4).delay(0.5), value: statsAppeared)
 
+                    // Pro Feature: Injury Risk Score
+                    if engine.isPro {
+                        VStack(spacing: 12) {
+                            HStack {
+                                Image(systemName: "heart.text.square.fill")
+                                    .font(.title3).foregroundStyle(Color.statusRed)
+                                Text("Injury Risk Score").font(.subheadline.bold()).foregroundStyle(.white)
+                                Spacer()
+                                HStack(spacing: 3) {
+                                    Image(systemName: "crown.fill").font(.system(size: 8))
+                                    Text("PRO").font(.system(size: 9, weight: .bold))
+                                }.foregroundStyle(Color.brand)
+                            }
+
+                            let riskScore = computeRiskScore(r)
+                            HStack(spacing: 16) {
+                                // Risk gauge
+                                ZStack {
+                                    Circle()
+                                        .stroke(Color.bgCardLight, lineWidth: 6)
+                                        .frame(width: 60, height: 60)
+                                    Circle()
+                                        .trim(from: 0, to: CGFloat(riskScore) / 100)
+                                        .stroke(
+                                            riskScore > 70 ? Color.statusRed : riskScore > 40 ? Color.statusYellow : Color.statusGreen,
+                                            style: StrokeStyle(lineWidth: 6, lineCap: .round)
+                                        )
+                                        .frame(width: 60, height: 60)
+                                        .rotationEffect(.degrees(-90))
+                                    Text("\(riskScore)")
+                                        .font(.system(size: 18, weight: .black, design: .rounded))
+                                        .foregroundStyle(.white)
+                                }
+
+                                VStack(alignment: .leading, spacing: 6) {
+                                    Text(riskScore > 70 ? "HIGH RISK" : riskScore > 40 ? "MODERATE" : "LOW RISK")
+                                        .font(.caption.bold())
+                                        .foregroundStyle(riskScore > 70 ? Color.statusRed : riskScore > 40 ? Color.statusYellow : Color.statusGreen)
+                                    Text("Combines valgus degradation, trend direction, session count, and injury history into a single actionable score.")
+                                        .font(.system(size: 10))
+                                        .foregroundStyle(Color.textSecondary)
+                                        .lineLimit(3)
+                                }
+                                Spacer()
+                            }
+                        }
+                        .padding(16)
+                        .background(Color.bgCard)
+                        .overlay(
+                            RoundedRectangle(cornerRadius: 14)
+                                .stroke(
+                                    computeRiskScore(r) > 70 ? Color.statusRed.opacity(0.3) :
+                                    computeRiskScore(r) > 40 ? Color.statusYellow.opacity(0.2) : Color.statusGreen.opacity(0.2),
+                                    lineWidth: 1
+                                )
+                        )
+                        .cornerRadius(14)
+                        .padding(.horizontal)
+                    }
+
                     // Baseline Controls
                     if let athlete = engine.athletes.first(where: { $0.id == athleteID }) {
                         VStack(alignment: .leading, spacing: 10) {
@@ -2497,10 +2557,21 @@ struct AthleteDetailView: View {
         .navigationBarTitleDisplayMode(.inline)
         .toolbar {
             ToolbarItem(placement: .topBarTrailing) {
-                ShareLink(item: "LANDER Buddy — \(r?.name ?? "Athlete") Report",
-                    subject: Text("Athlete Report"),
-                    message: Text("\(r?.name ?? "") — \(Int(r?.fatigueDegradationPct ?? 0))% degradation, Status: \(r?.status.rawValue ?? "")")) {
-                    Image(systemName: "square.and.arrow.up").foregroundStyle(Color.brand)
+                if engine.isPro {
+                    Button {
+                        if let r = r {
+                            let pdfData = PDFReportGenerator.generateAthleteReport(athlete: r, engine: engine)
+                            PDFReportGenerator.sharePDF(data: pdfData, filename: "LANDER_\(r.name.replacingOccurrences(of: " ", with: "_")).pdf")
+                        }
+                    } label: {
+                        Image(systemName: "doc.richtext").foregroundStyle(Color.brand)
+                    }
+                } else {
+                    ShareLink(item: "LANDER Buddy — \(r?.name ?? "Athlete") Report",
+                        subject: Text("Athlete Report"),
+                        message: Text("\(r?.name ?? "") — \(Int(r?.fatigueDegradationPct ?? 0))% degradation, Status: \(r?.status.rawValue ?? "")")) {
+                        Image(systemName: "square.and.arrow.up").foregroundStyle(Color.brand)
+                    }
                 }
             }
         }
@@ -2552,6 +2623,24 @@ struct AthleteDetailView: View {
             ProPaywallView(triggerReason: .deeperAnalysis)
                 .environment(engine)
         }
+    }
+
+    private func computeRiskScore(_ r: AthleteReadiness) -> Int {
+        var score: Double = 0
+        // Degradation factor (0-40 points)
+        score += min(40, r.fatigueDegradationPct * 2)
+        // Trend factor (0-20 points)
+        if r.trend == .worsening { score += 20 }
+        else if r.trend == .stable { score += 8 }
+        // Session count factor — fewer sessions = less reliable = higher uncertainty (0-15)
+        if r.sessionCount < 4 { score += 15 }
+        else if r.sessionCount < 8 { score += 8 }
+        // Injury history factor (0-25 points)
+        if let athlete = engine.athletes.first(where: { $0.id == r.id }) {
+            let injuryCount = (athlete.injuryNotes ?? []).count
+            score += min(25, Double(injuryCount) * 12)
+        }
+        return Int(min(100, max(0, score)))
     }
 }
 
@@ -4145,6 +4234,274 @@ struct ProFeatureRow: View {
 }
 
 
+// MARK: - PDF Report Generator (Pro Feature)
+enum PDFReportGenerator {
+
+    static func generateAthleteReport(athlete: AthleteReadiness, engine: DataEngine) -> Data {
+        let pageWidth: CGFloat = 612
+        let pageHeight: CGFloat = 792
+        let margin: CGFloat = 50
+
+        let pdfData = NSMutableData()
+        UIGraphicsBeginPDFContextToData(pdfData, CGRect(x: 0, y: 0, width: pageWidth, height: pageHeight), nil)
+        UIGraphicsBeginPDFPage()
+
+        guard let context = UIGraphicsGetCurrentContext() else { return Data() }
+
+        var y: CGFloat = margin
+
+        // Header background
+        context.setFillColor(UIColor(red: 0.04, green: 0.06, blue: 0.1, alpha: 1).cgColor)
+        context.fill(CGRect(x: 0, y: 0, width: pageWidth, height: 100))
+
+        // LANDER branding
+        let brandAttrs: [NSAttributedString.Key: Any] = [
+            .font: UIFont.systemFont(ofSize: 24, weight: .black),
+            .foregroundColor: UIColor(red: 0.776, green: 0.949, blue: 0.306, alpha: 1)
+        ]
+        "LANDER".draw(at: CGPoint(x: margin, y: 30), withAttributes: brandAttrs)
+
+        let subtitleAttrs: [NSAttributedString.Key: Any] = [
+            .font: UIFont.systemFont(ofSize: 11, weight: .medium),
+            .foregroundColor: UIColor(white: 0.6, alpha: 1)
+        ]
+        "Athlete Biomechanics Report".draw(at: CGPoint(x: margin, y: 60), withAttributes: subtitleAttrs)
+
+        // Date
+        let dateAttrs: [NSAttributedString.Key: Any] = [
+            .font: UIFont.systemFont(ofSize: 11),
+            .foregroundColor: UIColor(white: 0.6, alpha: 1)
+        ]
+        let dateStr = Date().formatted(date: .long, time: .omitted)
+        dateStr.draw(at: CGPoint(x: pageWidth - margin - 150, y: 60), withAttributes: dateAttrs)
+
+        y = 120
+
+        // Athlete name & info
+        let nameAttrs: [NSAttributedString.Key: Any] = [
+            .font: UIFont.systemFont(ofSize: 22, weight: .bold),
+            .foregroundColor: UIColor.black
+        ]
+        athlete.name.draw(at: CGPoint(x: margin, y: y), withAttributes: nameAttrs)
+        y += 30
+
+        let infoAttrs: [NSAttributedString.Key: Any] = [
+            .font: UIFont.systemFont(ofSize: 13),
+            .foregroundColor: UIColor.darkGray
+        ]
+        "#\(athlete.jersey) • \(athlete.position) • \(engine.teamName)".draw(at: CGPoint(x: margin, y: y), withAttributes: infoAttrs)
+        y += 30
+
+        // Status badge
+        let statusColor: UIColor = athlete.status == .atRisk ? .systemRed :
+            athlete.status == .caution ? .systemOrange : .systemGreen
+        context.setFillColor(statusColor.withAlphaComponent(0.15).cgColor)
+        context.fill(CGRect(x: margin, y: y, width: 100, height: 24))
+        let statusAttrs: [NSAttributedString.Key: Any] = [
+            .font: UIFont.systemFont(ofSize: 11, weight: .bold),
+            .foregroundColor: statusColor
+        ]
+        athlete.status.rawValue.draw(at: CGPoint(x: margin + 8, y: y + 5), withAttributes: statusAttrs)
+
+        let trendStr = "Trend: \(athlete.trend.rawValue)"
+        trendStr.draw(at: CGPoint(x: margin + 120, y: y + 5), withAttributes: infoAttrs)
+        y += 45
+
+        // Divider
+        context.setStrokeColor(UIColor(white: 0.85, alpha: 1).cgColor)
+        context.setLineWidth(1)
+        context.move(to: CGPoint(x: margin, y: y))
+        context.addLine(to: CGPoint(x: pageWidth - margin, y: y))
+        context.strokePath()
+        y += 20
+
+        // Key Metrics Section
+        let sectionAttrs: [NSAttributedString.Key: Any] = [
+            .font: UIFont.systemFont(ofSize: 14, weight: .bold),
+            .foregroundColor: UIColor.black
+        ]
+        "KEY METRICS".draw(at: CGPoint(x: margin, y: y), withAttributes: sectionAttrs)
+        y += 25
+
+        let metricAttrs: [NSAttributedString.Key: Any] = [
+            .font: UIFont.systemFont(ofSize: 12),
+            .foregroundColor: UIColor.darkGray
+        ]
+        let valueAttrs: [NSAttributedString.Key: Any] = [
+            .font: UIFont.systemFont(ofSize: 14, weight: .semibold),
+            .foregroundColor: UIColor.black
+        ]
+
+        let metrics: [(String, String)] = [
+            ("Fatigue Degradation", "\(Int(athlete.fatigueDegradationPct))%"),
+            ("Baseline Valgus", String(format: "%.1f°", athlete.baselineValgus)),
+            ("Latest Fatigued Valgus", String(format: "%.1f°", athlete.latestFatiguedValgus)),
+            ("Total Sessions", "\(athlete.sessionCount)"),
+        ]
+
+        for (label, value) in metrics {
+            label.draw(at: CGPoint(x: margin, y: y), withAttributes: metricAttrs)
+            value.draw(at: CGPoint(x: margin + 200, y: y), withAttributes: valueAttrs)
+            y += 22
+        }
+        y += 15
+
+        // Recommendation
+        "RECOMMENDATION".draw(at: CGPoint(x: margin, y: y), withAttributes: sectionAttrs)
+        y += 25
+
+        let recAttrs: [NSAttributedString.Key: Any] = [
+            .font: UIFont.systemFont(ofSize: 12),
+            .foregroundColor: UIColor.darkGray
+        ]
+        let recRect = CGRect(x: margin, y: y, width: pageWidth - margin * 2, height: 60)
+        (athlete.recommendation as NSString).draw(in: recRect, withAttributes: recAttrs)
+        y += 70
+
+        // Session History
+        "SESSION HISTORY".draw(at: CGPoint(x: margin, y: y), withAttributes: sectionAttrs)
+        y += 25
+
+        let headerRowAttrs: [NSAttributedString.Key: Any] = [
+            .font: UIFont.systemFont(ofSize: 10, weight: .bold),
+            .foregroundColor: UIColor.gray
+        ]
+        "Date".draw(at: CGPoint(x: margin, y: y), withAttributes: headerRowAttrs)
+        "Type".draw(at: CGPoint(x: margin + 120, y: y), withAttributes: headerRowAttrs)
+        "Value".draw(at: CGPoint(x: margin + 200, y: y), withAttributes: headerRowAttrs)
+        "Delta".draw(at: CGPoint(x: margin + 280, y: y), withAttributes: headerRowAttrs)
+        y += 18
+
+        let rowAttrs: [NSAttributedString.Key: Any] = [
+            .font: UIFont.systemFont(ofSize: 10),
+            .foregroundColor: UIColor.darkGray
+        ]
+
+        for session in athlete.allSessions.suffix(12).reversed() {
+            guard y < pageHeight - 100 else { break }
+            let dateFormatted = session.date.formatted(.dateTime.month(.abbreviated).day())
+            dateFormatted.draw(at: CGPoint(x: margin, y: y), withAttributes: rowAttrs)
+            let typeStr = session.isFresh ? "Fresh" : "Fatigued"
+            typeStr.draw(at: CGPoint(x: margin + 120, y: y), withAttributes: rowAttrs)
+            String(format: "%.1f°", session.value).draw(at: CGPoint(x: margin + 200, y: y), withAttributes: rowAttrs)
+            if !session.isFresh && athlete.baselineValgus > 0 {
+                let delta = ((session.value - athlete.baselineValgus) / athlete.baselineValgus) * 100
+                let deltaStr = String(format: "%+.0f%%", delta)
+                let deltaColor: UIColor = delta > 18 ? .systemRed : delta > 10 ? .systemOrange : .systemGreen
+                let deltaAttrs: [NSAttributedString.Key: Any] = [.font: UIFont.systemFont(ofSize: 10, weight: .semibold), .foregroundColor: deltaColor]
+                deltaStr.draw(at: CGPoint(x: margin + 280, y: y), withAttributes: deltaAttrs)
+            }
+            y += 16
+        }
+
+        // Footer
+        y = pageHeight - 60
+        context.setStrokeColor(UIColor(white: 0.85, alpha: 1).cgColor)
+        context.move(to: CGPoint(x: margin, y: y))
+        context.addLine(to: CGPoint(x: pageWidth - margin, y: y))
+        context.strokePath()
+        y += 12
+
+        let footerAttrs: [NSAttributedString.Key: Any] = [
+            .font: UIFont.systemFont(ofSize: 9),
+            .foregroundColor: UIColor.lightGray
+        ]
+        "Generated by LANDER Buddy • For decision-support only • Not a medical diagnosis".draw(at: CGPoint(x: margin, y: y), withAttributes: footerAttrs)
+        "landeracl.com".draw(at: CGPoint(x: pageWidth - margin - 80, y: y + 14), withAttributes: footerAttrs)
+
+        UIGraphicsEndPDFContext()
+        return pdfData as Data
+    }
+
+    static func generateTeamReport(engine: DataEngine) -> Data {
+        let pageWidth: CGFloat = 612
+        let pageHeight: CGFloat = 792
+        let margin: CGFloat = 50
+
+        let pdfData = NSMutableData()
+        UIGraphicsBeginPDFContextToData(pdfData, CGRect(x: 0, y: 0, width: pageWidth, height: pageHeight), nil)
+        UIGraphicsBeginPDFPage()
+
+        guard let context = UIGraphicsGetCurrentContext() else { return Data() }
+
+        var y: CGFloat = margin
+
+        // Header
+        context.setFillColor(UIColor(red: 0.04, green: 0.06, blue: 0.1, alpha: 1).cgColor)
+        context.fill(CGRect(x: 0, y: 0, width: pageWidth, height: 100))
+
+        let brandAttrs: [NSAttributedString.Key: Any] = [
+            .font: UIFont.systemFont(ofSize: 24, weight: .black),
+            .foregroundColor: UIColor(red: 0.776, green: 0.949, blue: 0.306, alpha: 1)
+        ]
+        "LANDER".draw(at: CGPoint(x: margin, y: 30), withAttributes: brandAttrs)
+
+        let subtitleAttrs: [NSAttributedString.Key: Any] = [
+            .font: UIFont.systemFont(ofSize: 11, weight: .medium),
+            .foregroundColor: UIColor(white: 0.6, alpha: 1)
+        ]
+        "Game Day Readiness Report".draw(at: CGPoint(x: margin, y: 60), withAttributes: subtitleAttrs)
+
+        let dateStr = Date().formatted(date: .long, time: .omitted)
+        dateStr.draw(at: CGPoint(x: pageWidth - margin - 150, y: 60), withAttributes: subtitleAttrs)
+
+        y = 120
+
+        // Team info
+        let nameAttrs: [NSAttributedString.Key: Any] = [.font: UIFont.systemFont(ofSize: 20, weight: .bold), .foregroundColor: UIColor.black]
+        engine.teamName.draw(at: CGPoint(x: margin, y: y), withAttributes: nameAttrs)
+        y += 28
+
+        let scoreAttrs: [NSAttributedString.Key: Any] = [.font: UIFont.systemFont(ofSize: 36, weight: .black), .foregroundColor: UIColor.black]
+        "\(engine.teamScore)/100".draw(at: CGPoint(x: margin, y: y), withAttributes: scoreAttrs)
+        let labelAttrs: [NSAttributedString.Key: Any] = [.font: UIFont.systemFont(ofSize: 11), .foregroundColor: UIColor.gray]
+        "Team Readiness Score".draw(at: CGPoint(x: margin + 130, y: y + 15), withAttributes: labelAttrs)
+        y += 55
+
+        // Clearance categories
+        let sectionAttrs: [NSAttributedString.Key: Any] = [.font: UIFont.systemFont(ofSize: 13, weight: .bold), .foregroundColor: UIColor.black]
+        let rowAttrs: [NSAttributedString.Key: Any] = [.font: UIFont.systemFont(ofSize: 11), .foregroundColor: UIColor.darkGray]
+
+        let categories: [(String, [AthleteReadiness], UIColor)] = [
+            ("✅ FULL GO", engine.allReadiness.filter { $0.status == .good }, .systemGreen),
+            ("⚠️ LIMITED", engine.allReadiness.filter { $0.status == .caution }, .systemOrange),
+            ("🚫 DO NOT PLAY", engine.allReadiness.filter { $0.status == .atRisk }, .systemRed),
+        ]
+
+        for (title, athletes, color) in categories {
+            guard y < pageHeight - 100 else { break }
+            let titleAttrs: [NSAttributedString.Key: Any] = [.font: UIFont.systemFont(ofSize: 12, weight: .bold), .foregroundColor: color]
+            title.draw(at: CGPoint(x: margin, y: y), withAttributes: titleAttrs)
+            y += 18
+            for r in athletes {
+                guard y < pageHeight - 80 else { break }
+                "\(r.name) #\(r.jersey) — \(r.position) — \(Int(r.fatigueDegradationPct))% degradation".draw(at: CGPoint(x: margin + 16, y: y), withAttributes: rowAttrs)
+                y += 16
+            }
+            y += 12
+        }
+
+        // Footer
+        y = pageHeight - 60
+        let footerAttrs: [NSAttributedString.Key: Any] = [.font: UIFont.systemFont(ofSize: 9), .foregroundColor: UIColor.lightGray]
+        "Generated by LANDER Buddy • For decision-support only • landeracl.com".draw(at: CGPoint(x: margin, y: y), withAttributes: footerAttrs)
+
+        UIGraphicsEndPDFContext()
+        return pdfData as Data
+    }
+
+    static func sharePDF(data: Data, filename: String) {
+        let tempURL = FileManager.default.temporaryDirectory.appendingPathComponent(filename)
+        try? data.write(to: tempURL)
+        let av = UIActivityViewController(activityItems: [tempURL], applicationActivities: nil)
+        if let scene = UIApplication.shared.connectedScenes.first as? UIWindowScene,
+           let root = scene.windows.first?.rootViewController {
+            root.present(av, animated: true)
+        }
+    }
+}
+
+
 // MARK: - Settings (Complete)
 struct SettingsView: View {
     @Environment(DataEngine.self) private var engine
@@ -4257,6 +4614,24 @@ struct SettingsView: View {
                                 }
                             }
                         }
+
+                        // Restore Purchases (App Store compliance)
+                        Button {
+                            Task {
+                                await SubscriptionManager.shared.restore()
+                                if SubscriptionManager.shared.isProActive {
+                                    engine.isPro = true
+                                }
+                            }
+                        } label: {
+                            HStack {
+                                Image(systemName: "arrow.clockwise.circle").foregroundStyle(Color.textSecondary).frame(width: 24)
+                                Text("Restore Purchases").font(.subheadline).foregroundStyle(.white)
+                                Spacer()
+                            }.padding(14)
+                        }
+                        .background(Color.bgCard)
+                        .cornerRadius(14)
 
                         // About
                         SettingsSection(title: "ABOUT") {
@@ -4579,16 +4954,52 @@ struct GameDayReportView: View {
                 }.padding(.horizontal)
                 
                 // Share button
-                Button {
-                    shareGameDayReport()
-                } label: {
-                    HStack {
-                        Image(systemName: "square.and.arrow.up")
-                        Text("Share Report")
+                if engine.isPro {
+                    Button {
+                        let pdfData = PDFReportGenerator.generateTeamReport(engine: engine)
+                        PDFReportGenerator.sharePDF(data: pdfData, filename: "LANDER_GameDay_\(engine.teamName).pdf")
+                    } label: {
+                        HStack {
+                            Image(systemName: "doc.richtext")
+                            Text("Export PDF Report")
+                        }
+                        .font(.headline).frame(maxWidth: .infinity).padding(15)
+                        .background(Color.brand).foregroundStyle(.black).cornerRadius(14)
+                    }.padding(.horizontal)
+                } else {
+                    Button {
+                        shareGameDayReport()
+                    } label: {
+                        HStack {
+                            Image(systemName: "square.and.arrow.up")
+                            Text("Share Report")
+                        }
+                        .font(.headline).frame(maxWidth: .infinity).padding(15)
+                        .background(Color.brand).foregroundStyle(.black).cornerRadius(14)
+                    }.padding(.horizontal)
+                    
+                    // Pro upsell for PDF
+                    Button {
+                        engine.showProPaywall = true
+                    } label: {
+                        HStack(spacing: 8) {
+                            Image(systemName: "doc.richtext").foregroundStyle(Color.brand)
+                            Text("Export as PDF").font(.caption.bold()).foregroundStyle(.white)
+                            Spacer()
+                            HStack(spacing: 3) {
+                                Image(systemName: "lock.fill").font(.system(size: 8))
+                                Text("PRO").font(.system(size: 10, weight: .bold))
+                            }
+                            .foregroundStyle(Color.brand)
+                            .padding(.horizontal, 7).padding(.vertical, 3)
+                            .background(Color.brand.opacity(0.12))
+                            .clipShape(Capsule())
+                        }
+                        .padding(14).background(Color.bgCard).cornerRadius(12)
                     }
-                    .font(.headline).frame(maxWidth: .infinity).padding(15)
-                    .background(Color.brand).foregroundStyle(.black).cornerRadius(14)
-                }.padding(.horizontal)
+                    .buttonStyle(.plain)
+                    .padding(.horizontal)
+                }
                 
                 // Disclaimer
                 Text("This report is decision-support only. Clinical judgment should guide all return-to-play decisions.")
