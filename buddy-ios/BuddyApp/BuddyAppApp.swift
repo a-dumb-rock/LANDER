@@ -786,6 +786,38 @@ class DataEngine {
 
     var captureOverdue: Bool { daysSinceLastCapture > 4 }
 
+    /// Weekly capture streak — how many consecutive weeks they've recorded sessions
+    var weeklyStreak: Int {
+        guard !athletes.isEmpty else { return 0 }
+        let allDates = athletes.flatMap(\.sessions).map(\.date).sorted(by: >)
+        guard !allDates.isEmpty else { return 0 }
+        let cal = Calendar.current
+        var streak = 1
+        var currentWeek = cal.component(.weekOfYear, from: allDates[0])
+        var currentYear = cal.component(.yearForWeekOfYear, from: allDates[0])
+        
+        var checkedWeeks: Set<String> = ["\(currentYear)-\(currentWeek)"]
+        
+        for date in allDates {
+            let week = cal.component(.weekOfYear, from: date)
+            let year = cal.component(.yearForWeekOfYear, from: date)
+            let key = "\(year)-\(week)"
+            if !checkedWeeks.contains(key) {
+                // Check if this is the previous week
+                let prevWeekDate = cal.date(byAdding: .weekOfYear, value: -checkedWeeks.count, to: allDates[0])!
+                let expectedWeek = cal.component(.weekOfYear, from: prevWeekDate)
+                let expectedYear = cal.component(.yearForWeekOfYear, from: prevWeekDate)
+                if week == expectedWeek && year == expectedYear {
+                    streak += 1
+                    checkedWeeks.insert(key)
+                } else {
+                    break
+                }
+            }
+        }
+        return streak
+    }
+
     func scheduleWeeklyReminders() {
         guard notificationsEnabled else { return }
         UNUserNotificationCenter.current().removePendingNotificationRequests(withIdentifiers: ["fresh_reminder", "fatigued_reminder"])
@@ -1781,6 +1813,57 @@ struct DashboardView: View {
                             .padding(14).background(Color.bgCard).cornerRadius(14)
                         }.padding(.horizontal)
 
+                        // Last Capture + Streak Card
+                        HStack(spacing: 12) {
+                            // Days since last capture
+                            VStack(spacing: 6) {
+                                let days = engine.daysSinceLastCapture
+                                Text("\(days)")
+                                    .font(.system(size: 28, weight: .black, design: .rounded))
+                                    .foregroundStyle(days > 4 ? Color.statusRed : days > 2 ? Color.statusYellow : Color.statusGreen)
+                                Text("days since\nlast capture")
+                                    .font(.system(size: 10))
+                                    .foregroundStyle(Color.textSecondary)
+                                    .multilineTextAlignment(.center)
+                            }
+                            .frame(maxWidth: .infinity)
+                            .padding(14)
+                            .background(Color.bgCard)
+                            .cornerRadius(14)
+
+                            // Weekly streak
+                            VStack(spacing: 6) {
+                                HStack(spacing: 4) {
+                                    Text("\(engine.weeklyStreak)")
+                                        .font(.system(size: 28, weight: .black, design: .rounded))
+                                        .foregroundStyle(Color.brand)
+                                    Image(systemName: "flame.fill")
+                                        .font(.system(size: 16))
+                                        .foregroundStyle(engine.weeklyStreak >= 3 ? Color.brand : Color.textSecondary)
+                                }
+                                Text("week streak")
+                                    .font(.system(size: 10))
+                                    .foregroundStyle(Color.textSecondary)
+                            }
+                            .frame(maxWidth: .infinity)
+                            .padding(14)
+                            .background(Color.bgCard)
+                            .cornerRadius(14)
+
+                            // Team Pulse
+                            VStack(spacing: 6) {
+                                TeamPulseIndicator()
+                                Text("team pulse")
+                                    .font(.system(size: 10))
+                                    .foregroundStyle(Color.textSecondary)
+                            }
+                            .frame(maxWidth: .infinity)
+                            .padding(14)
+                            .background(Color.bgCard)
+                            .cornerRadius(14)
+                        }
+                        .padding(.horizontal)
+
                         // Weekly Comparison Card (#6)
                         let comp = weekComparison
                         if engine.teamDeltaTrend.count >= 2 {
@@ -1806,18 +1889,9 @@ struct DashboardView: View {
                             .padding(.horizontal)
                         }
 
-                        // Capture Overdue Reminder
-                        if engine.captureOverdue {
-                            HStack(spacing: 10) {
-                                Image(systemName: "clock.badge.exclamationmark").font(.title3).foregroundStyle(Color.statusYellow)
-                                VStack(alignment: .leading, spacing: 2) {
-                                    Text("Capture Overdue").font(.caption.bold()).foregroundStyle(.white)
-                                    Text("\(engine.daysSinceLastCapture) days since last session — data gaps weaken trend accuracy.").font(.caption2).foregroundStyle(Color.textSecondary)
-                                }
-                                Spacer()
-                            }
-                            .padding(12).background(Color.statusYellow.opacity(0.1)).cornerRadius(12).padding(.horizontal)
-                        }
+                        // ACL Insights — rotating prevention tips
+                        ACLInsightCard()
+                            .padding(.horizontal)
 
                         // Alert Section: At Risk athletes
                         let atRiskAthletes = engine.allReadiness.filter { $0.status == .atRisk }
@@ -3684,12 +3758,18 @@ struct RosterView: View {
                                     .padding(14).background(Color.bgCard).cornerRadius(14)
                                 }
                                 .buttonStyle(CardPressStyle())
-                                .contextMenu {
+                                .swipeActions(edge: .trailing, allowsFullSwipe: true) {
                                     Button(role: .destructive) {
                                         withAnimation(.spring(response: 0.3, dampingFraction: 0.7)) {
                                             engine.removeAthlete(a.id)
                                         }
                                     } label: { Label("Delete", systemImage: "trash") }
+                                }
+                                .swipeActions(edge: .leading, allowsFullSwipe: true) {
+                                    NavigationLink(value: a.id) {
+                                        Label("View", systemImage: "chart.line.uptrend.xyaxis")
+                                    }
+                                    .tint(Color.brand)
                                 }
                             }
                         }
@@ -3997,6 +4077,101 @@ struct SessionDetailSheet: View {
             }
             .navigationTitle("Session Details")
             .navigationBarTitleDisplayMode(.inline)
+        }
+    }
+}
+
+
+// MARK: - Team Pulse Indicator (animated heartbeat dot)
+struct TeamPulseIndicator: View {
+    @State private var pulse = false
+    var body: some View {
+        ZStack {
+            Circle()
+                .fill(Color.brand.opacity(0.2))
+                .frame(width: 32, height: 32)
+                .scaleEffect(pulse ? 1.4 : 1.0)
+                .opacity(pulse ? 0 : 0.6)
+            Circle()
+                .fill(Color.brand)
+                .frame(width: 12, height: 12)
+                .shadow(color: Color.brand.opacity(0.6), radius: 4)
+        }
+        .onAppear {
+            withAnimation(.easeInOut(duration: 1.2).repeatForever(autoreverses: false)) {
+                pulse = true
+            }
+        }
+    }
+}
+
+
+// MARK: - ACL Insight Card (rotating tips)
+struct ACLInsightCard: View {
+    @State private var currentTip = 0
+    @State private var appeared = false
+
+    private let tips: [(icon: String, title: String, body: String)] = [
+        ("figure.cooldown", "Landing Mechanics Matter",
+         "70% of ACL injuries are non-contact. Poor landing biomechanics during deceleration is the #1 modifiable risk factor."),
+        ("chart.line.uptrend.xyaxis", "Fatigue Changes Everything",
+         "Knee valgus increases 15-30% when athletes are fatigued. That's why we compare fresh vs. fatigued landings."),
+        ("clock.badge.exclamationmark", "Consistency is Key",
+         "Weekly captures build reliable baselines. Gaps >7 days reduce trend accuracy and can miss early warning signs."),
+        ("brain.head.profile", "AI-Powered Detection",
+         "LANDER uses Apple Vision framework to detect 17 body joints and calculate real knee valgus angles from video."),
+        ("shield.checkered", "Prevention > Recovery",
+         "ACL reconstruction costs $20-50K and takes 9-12 months. Early detection through movement screening can prevent 50%+ of injuries."),
+        ("figure.run", "The 2-Degree Rule",
+         "Just 2 degrees increase in knee valgus under fatigue correlates with 3x higher ACL injury risk in female athletes aged 14-18."),
+    ]
+
+    var body: some View {
+        let tip = tips[currentTip % tips.count]
+        HStack(alignment: .top, spacing: 12) {
+            Image(systemName: tip.icon)
+                .font(.system(size: 20))
+                .foregroundStyle(Color.brand)
+                .frame(width: 28)
+            VStack(alignment: .leading, spacing: 4) {
+                HStack {
+                    Text("ACL INSIGHT")
+                        .font(.system(size: 9, weight: .bold))
+                        .foregroundStyle(Color.brand)
+                        .tracking(1)
+                    Spacer()
+                    HStack(spacing: 3) {
+                        ForEach(0..<tips.count, id: \.self) { i in
+                            Circle()
+                                .fill(i == currentTip % tips.count ? Color.brand : Color.textSecondary.opacity(0.3))
+                                .frame(width: 4, height: 4)
+                        }
+                    }
+                }
+                Text(tip.title)
+                    .font(.caption.bold()).foregroundStyle(.white)
+                Text(tip.body)
+                    .font(.system(size: 11)).foregroundStyle(Color.textSecondary)
+                    .lineLimit(3)
+            }
+        }
+        .padding(14)
+        .background(Color.bgCard)
+        .overlay(
+            HStack {
+                Rectangle().fill(Color.brand.opacity(0.5)).frame(width: 2)
+                Spacer()
+            }
+        )
+        .cornerRadius(12)
+        .opacity(appeared ? 1 : 0)
+        .onAppear {
+            withAnimation(.easeOut(duration: 0.4)) { appeared = true }
+        }
+        .onTapGesture {
+            withAnimation(.easeInOut(duration: 0.3)) {
+                currentTip = (currentTip + 1) % tips.count
+            }
         }
     }
 }
