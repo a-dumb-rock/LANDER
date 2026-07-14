@@ -541,9 +541,8 @@ class DataEngine {
     init() {
         if let saved = PersistenceManager.loadAthletes(), !saved.isEmpty {
             athletes = saved
-        } else {
-            loadDemoData()
         }
+        // Demo data only loads via "Skip — use demo data" button or "Reset Demo" in settings
         if !storedTeamName.isEmpty { teamName = storedTeamName }
         if !storedCoachName.isEmpty { userName = storedCoachName }
         if !storedSportType.isEmpty { sportType = storedSportType }
@@ -1296,6 +1295,7 @@ struct OnboardingView: View {
                     }.padding(.horizontal, 36)
 
                     Button("Skip — use demo data") {
+                        engine.loadDemoData()
                         engine.hasCompletedOnboarding = true
                         engine.showSplash = true
                         engine.isSignedIn = true
