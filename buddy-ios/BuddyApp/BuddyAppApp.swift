@@ -872,40 +872,39 @@ struct DefenderFigure: View {
 // MARK: - LANDER Diamond Logo
 struct LanderDiamond: View {
     var body: some View {
-        GeometryReader { geo in
-            let scaleX = geo.size.width / 40
-            let scaleY = geo.size.height / 52
+        Canvas { context, size in
+            let scaleX = size.width / 40
+            let scaleY = size.height / 52
             let scale = min(scaleX, scaleY)
-            let offsetX = (geo.size.width - 40 * scale) / 2
-            let offsetY = (geo.size.height - 52 * scale) / 2
+            let offsetX = (size.width - 40 * scale) / 2
+            let offsetY = (size.height - 52 * scale) / 2
             
-            Path { path in
-                // Top-left triangle
-                path.move(to: CGPoint(x: 20, y: 2.5))
-                path.addLine(to: CGPoint(x: 5, y: 23.5))
-                path.addLine(to: CGPoint(x: 19.1, y: 23.5))
-                path.closeSubpath()
-                // Top-right triangle
-                path.move(to: CGPoint(x: 20, y: 2.5))
-                path.addLine(to: CGPoint(x: 35, y: 23.5))
-                path.addLine(to: CGPoint(x: 20.9, y: 23.5))
-                path.closeSubpath()
-                // Bottom-left triangle
-                path.move(to: CGPoint(x: 20, y: 49.5))
-                path.addLine(to: CGPoint(x: 5, y: 28.5))
-                path.addLine(to: CGPoint(x: 19.1, y: 28.5))
-                path.closeSubpath()
-                // Bottom-right triangle
-                path.move(to: CGPoint(x: 20, y: 49.5))
-                path.addLine(to: CGPoint(x: 35, y: 28.5))
-                path.addLine(to: CGPoint(x: 20.9, y: 28.5))
-                path.closeSubpath()
-            }
-            .fill(Color.brand)
-            .scaleEffect(scale, anchor: .topLeading)
-            .offset(x: offsetX, y: offsetY)
+            var path = Path()
+            // Top-left triangle
+            path.move(to: CGPoint(x: 20, y: 2.5))
+            path.addLine(to: CGPoint(x: 5, y: 23.5))
+            path.addLine(to: CGPoint(x: 19.1, y: 23.5))
+            path.closeSubpath()
+            // Top-right triangle
+            path.move(to: CGPoint(x: 20, y: 2.5))
+            path.addLine(to: CGPoint(x: 35, y: 23.5))
+            path.addLine(to: CGPoint(x: 20.9, y: 23.5))
+            path.closeSubpath()
+            // Bottom-left triangle
+            path.move(to: CGPoint(x: 20, y: 49.5))
+            path.addLine(to: CGPoint(x: 5, y: 28.5))
+            path.addLine(to: CGPoint(x: 19.1, y: 28.5))
+            path.closeSubpath()
+            // Bottom-right triangle
+            path.move(to: CGPoint(x: 20, y: 49.5))
+            path.addLine(to: CGPoint(x: 35, y: 28.5))
+            path.addLine(to: CGPoint(x: 20.9, y: 28.5))
+            path.closeSubpath()
+            
+            context.translateBy(x: offsetX, y: offsetY)
+            context.scaleBy(x: scale, y: scale)
+            context.fill(path, with: .color(Color.brand))
         }
-        .aspectRatio(40/52, contentMode: .fit)
     }
 }
 
