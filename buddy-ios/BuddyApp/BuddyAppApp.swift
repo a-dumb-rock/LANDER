@@ -1481,6 +1481,8 @@ struct StatusBadge: View {
     }
     var body: some View {
         Text(status.rawValue).font(.system(size: 10, weight: .bold))
+            .lineLimit(1)
+            .fixedSize()
             .padding(.horizontal, 8).padding(.vertical, 4)
             .background(color.opacity(0.15))
             .foregroundStyle(color)
@@ -1510,6 +1512,8 @@ struct TrendBadge: View {
             Image(systemName: icon).font(.system(size: 9, weight: .bold))
             Text(trend.rawValue).font(.system(size: 10, weight: .bold))
         }
+        .lineLimit(1)
+        .fixedSize()
         .padding(.horizontal, 7).padding(.vertical, 4)
         .background(color.opacity(0.1))
         .foregroundStyle(color)
@@ -1853,8 +1857,11 @@ struct DashboardView: View {
                                         filterPosition = (filterPosition == pos) ? nil : pos; filterStatus = nil
                                     }
                                 }
-                            }.padding(.horizontal)
-                        }.padding(.vertical, 4)
+                            }
+                            .padding(.horizontal, 16)
+                            .padding(.trailing, 8)
+                        }
+                        .padding(.vertical, 4)
 
                         // Athlete List
                         VStack(spacing: 10) {
@@ -2136,35 +2143,19 @@ struct AthleteRow: View {
             JerseyCircle(number: readiness.jersey, size: 44, glowing: readiness.status == .atRisk)
             VStack(alignment: .leading, spacing: 3) {
                 Text(readiness.name).font(.subheadline.bold()).foregroundStyle(.white).lineLimit(1)
-                Text(readiness.position).font(.caption).foregroundStyle(Color.textSecondary)
-                if let note = latestNote {
-                    HStack(spacing: 4) {
-                        Image(systemName: "note.text").font(.system(size: 8))
-                        Text(note).lineLimit(1)
-                    }
-                    .font(.system(size: 10)).foregroundStyle(Color.brand.opacity(0.7))
-                } else {
-                    Text(readiness.recommendation).font(.system(size: 10)).foregroundStyle(Color.textSecondary.opacity(0.7)).lineLimit(1)
-                }
-            }
-            Spacer()
-            // Sparkline
-            SparklineView(
-                points: readiness.deltaHistory.suffix(5).map(\.value),
-                color: readiness.trend == .worsening ? Color.statusRed : readiness.trend == .improving ? Color.statusGreen : Color.textSecondary
-            ).frame(width: 44, height: 22)
-            VStack(alignment: .trailing, spacing: 4) {
-                Text("\(Int(readiness.fatigueDegradationPct))%")
-                    .font(.system(size: 16, weight: .bold, design: .rounded))
-                    .foregroundStyle(
-                        readiness.status == .atRisk ? Color.statusRed :
-                        readiness.status == .caution ? Color.statusYellow : Color.statusGreen
-                    )
-                HStack(spacing: 4) {
+                HStack(spacing: 6) {
+                    Text(readiness.position).font(.caption).foregroundStyle(Color.textSecondary)
                     StatusBadge(status: readiness.status)
                     TrendBadge(trend: readiness.trend)
                 }
             }
+            Spacer()
+            Text("\(Int(readiness.fatigueDegradationPct))%")
+                .font(.system(size: 18, weight: .bold, design: .rounded))
+                .foregroundStyle(
+                    readiness.status == .atRisk ? Color.statusRed :
+                    readiness.status == .caution ? Color.statusYellow : Color.statusGreen
+                )
         }
         .padding(14)
         .background(Color.bgCard)
