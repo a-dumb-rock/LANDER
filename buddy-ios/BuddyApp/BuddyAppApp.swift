@@ -417,11 +417,13 @@ enum VisionPoseAnalyzer {
         // Compute final metrics
         guard !allKneeAngles.isEmpty else { return nil }
 
-        let avgKneeFlexion = allKneeAngles.reduce(0, +) / Double(allKneeAngles.count)
+        let avgKneeFlexion = 180.0 - (allKneeAngles.reduce(0, +) / Double(allKneeAngles.count))
         let avgValgusLeft = leftKneeValgusAngles.isEmpty ? 0 : leftKneeValgusAngles.reduce(0, +) / Double(leftKneeValgusAngles.count)
         let avgValgusRight = rightKneeValgusAngles.isEmpty ? 0 : rightKneeValgusAngles.reduce(0, +) / Double(rightKneeValgusAngles.count)
         let avgValgus = (avgValgusLeft + avgValgusRight) / 2
-        let asymmetry = abs(avgValgusLeft - avgValgusRight) / max(1, max(avgValgusLeft, avgValgusRight)) * 100
+        // Asymmetry: difference relative to average, capped at 100%
+        let avgForAsym = (avgValgusLeft + avgValgusRight) / 2
+        let asymmetry = avgForAsym > 0.5 ? min(100, abs(avgValgusLeft - avgValgusRight) / avgForAsym * 50) : 0
         let trunkLean = allHipAngles.isEmpty ? 0 : allHipAngles.reduce(0, +) / Double(allHipAngles.count)
 
         // LESS score approximation (higher = worse)
