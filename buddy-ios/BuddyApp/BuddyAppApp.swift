@@ -1257,6 +1257,9 @@ struct OnboardingView: View {
     @Environment(DataEngine.self) private var engine
     @State private var logoScale: CGFloat = 0.8
     @State private var contentOpacity: Double = 0
+    @State private var showEmailSignIn = false
+    @State private var emailInput = ""
+    @State private var nameInput = ""
 
     var body: some View {
         ZStack {
@@ -1288,18 +1291,44 @@ struct OnboardingView: View {
 
                 // Sign In Buttons
                 VStack(spacing: 14) {
-                    SignInWithAppleButton(.signIn) { _ in } onCompletion: { _ in
-                        triggerSignIn()
+                    // Real Sign In with Apple
+                    SignInWithAppleButton(.signIn) { request in
+                        request.requestedScopes = [.fullName, .email]
+                    } onCompletion: { result in
+                        switch result {
+                        case .success(let auth):
+                            if let credential = auth.credential as? ASAuthorizationAppleIDCredential {
+                                let firstName = credential.fullName?.givenName ?? ""
+                                let lastName = credential.fullName?.familyName ?? ""
+                                let name = "\(firstName) \(lastName)".trimmingCharacters(in: .whitespaces)
+                                if !name.isEmpty {
+                                    engine.userName = name
+                                    engine.storedCoachName = name
+                                }
+                                if let email = credential.email {
+                                    UserDefaults.standard.set(email, forKey: "userEmail")
+                                }
+                                // Store Apple user ID for future sessions
+                                UserDefaults.standard.set(credential.user, forKey: "appleUserID")
+                            }
+                            Haptics.success()
+                            engine.showSplash = true
+                            engine.isSignedIn = true
+                        case .failure:
+                            // User cancelled or error — do nothing
+                            break
+                        }
                     }
                     .signInWithAppleButtonStyle(.white)
                     .frame(height: 52)
                     .cornerRadius(14)
                     .padding(.horizontal, 36)
 
-                    Button { triggerSignIn() } label: {
+                    // Continue with Email
+                    Button { showEmailSignIn = true } label: {
                         HStack(spacing: 8) {
-                            Image(systemName: "g.circle.fill").font(.title3)
-                            Text("Continue with Google").font(.subheadline.bold())
+                            Image(systemName: "envelope.fill").font(.body)
+                            Text("Continue with Email").font(.subheadline.bold())
                         }
                         .frame(maxWidth: .infinity).frame(height: 52)
                         .background(Color.bgCard).cornerRadius(14)
@@ -1320,12 +1349,91 @@ struct OnboardingView: View {
             withAnimation(.spring(response: 0.8, dampingFraction: 0.6)) { logoScale = 1.0 }
             withAnimation(.easeIn(duration: 0.5).delay(0.3)) { contentOpacity = 1.0 }
         }
+        .sheet(isPresented: $showEmailSignIn) {
+            EmailSignInSheet(email: $emailInput, name: $nameInput) {
+                if !nameInput.isEmpty {
+                    engine.userName = nameInput
+                    engine.storedCoachName = nameInput
+                }
+                if !emailInput.isEmpty {
+                    UserDefaults.standard.set(emailInput, forKey: "userEmail")
+                }
+                Haptics.success()
+                showEmailSignIn = false
+                engine.showSplash = true
+                engine.isSignedIn = true
+            }
+        }
     }
+}
 
-    private func triggerSignIn() {
-        Haptics.success()
-        engine.showSplash = true
-        engine.isSignedIn = true
+// MARK: - Email Sign In Sheet
+struct EmailSignInSheet: View {
+    @Binding var email: String
+    @Binding var name: String
+    let onSignIn: () -> Void
+    @Environment(\.dismiss) private var dismiss
+
+    var body: some View {
+        NavigationStack {
+            ZStack {
+                Color.bgPrimary.ignoresSafeArea()
+                VStack(spacing: 24) {
+                    VStack(spacing: 8) {
+                        Image(systemName: "envelope.circle.fill")
+                            .font(.system(size: 48))
+                            .foregroundStyle(Color.brand)
+                        Text("Sign In with Email")
+                            .font(.title3.bold()).foregroundStyle(.white)
+                        Text("Enter your details to get started")
+                            .font(.subheadline).foregroundStyle(Color.textSecondary)
+                    }
+                    .padding(.top, 24)
+
+                    VStack(spacing: 16) {
+                        VStack(alignment: .leading, spacing: 6) {
+                            Text("Name").font(.caption.bold()).foregroundStyle(Color.textSecondary)
+                            TextField("Your name", text: $name)
+                                .padding(14).background(Color.bgCard).cornerRadius(12)
+                                .foregroundStyle(.white)
+                                .autocorrectionDisabled()
+                        }
+                        VStack(alignment: .leading, spacing: 6) {
+                            Text("Email").font(.caption.bold()).foregroundStyle(Color.textSecondary)
+                            TextField("coach@school.edu", text: $email)
+                                .padding(14).background(Color.bgCard).cornerRadius(12)
+                                .foregroundStyle(.white)
+                                .keyboardType(.emailAddress)
+                                .autocorrectionDisabled()
+                                .textInputAutocapitalization(.never)
+                        }
+                    }
+                    .padding(.horizontal, 24)
+
+                    Button {
+                        onSignIn()
+                    } label: {
+                        Text("Continue")
+                            .font(.headline)
+                            .frame(maxWidth: .infinity).padding(15)
+                            .background(email.isEmpty ? Color.bgCardLight : Color.brand)
+                            .foregroundStyle(email.isEmpty ? Color.textSecondary : .black)
+                            .cornerRadius(14)
+                    }
+                    .disabled(email.isEmpty)
+                    .padding(.horizontal, 24)
+
+                    Spacer()
+                }
+            }
+            .toolbar {
+                ToolbarItem(placement: .cancellationAction) {
+                    Button("Cancel") { dismiss() }
+                        .foregroundStyle(Color.textSecondary)
+                }
+            }
+        }
+        .presentationDetents([.medium])
     }
 }
 
