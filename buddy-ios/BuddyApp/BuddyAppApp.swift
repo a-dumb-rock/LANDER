@@ -1773,21 +1773,8 @@ struct DashboardView: View {
     @State private var trendAppeared = false
     @State private var listAppeared = false
     @State private var refreshID = UUID()
-    @State private var showWalkthrough = false
-    @State private var walkthroughStep = 1
     @State private var filterStatus: AthleteStatus? = nil
     @State private var filterPosition: String? = nil
-
-    private var weekComparison: (thisWeek: Double, lastWeek: Double, improved: Bool) {
-        let trend = engine.teamDeltaTrend
-        guard trend.count >= 2 else { return (0, 0, true) }
-        let midpoint = trend.count / 2
-        let lastWeekSlice = trend.prefix(midpoint)
-        let thisWeekSlice = trend.suffix(from: midpoint)
-        let lastAvg = lastWeekSlice.isEmpty ? 0 : lastWeekSlice.map(\.value).reduce(0, +) / Double(lastWeekSlice.count)
-        let thisAvg = thisWeekSlice.isEmpty ? 0 : thisWeekSlice.map(\.value).reduce(0, +) / Double(thisWeekSlice.count)
-        return (thisAvg, lastAvg, thisAvg <= lastAvg)
-    }
 
     var body: some View {
         NavigationStack {
@@ -1799,49 +1786,6 @@ struct DashboardView: View {
                             .padding(.horizontal)
                             .opacity(heroAppeared ? 1 : 0)
                             .offset(y: heroAppeared ? 0 : 16)
-
-                        // Game Day Report card
-                        NavigationLink(destination: GameDayReportView()) {
-                            HStack(spacing: 12) {
-                                Image(systemName: "flag.checkered").font(.title3).foregroundStyle(Color.brand)
-                                VStack(alignment: .leading, spacing: 2) {
-                                    Text("Game Day Report").font(.subheadline.bold()).foregroundStyle(.white)
-                                    Text("Generate clearance report").font(.caption).foregroundStyle(Color.textSecondary)
-                                }
-                                Spacer()
-                                Image(systemName: "chevron.right").font(.caption).foregroundStyle(Color.textSecondary.opacity(0.5))
-                            }
-                            .padding(14).background(Color.bgCard).cornerRadius(14)
-                        }.padding(.horizontal)
-
-                        // Weekly Comparison Card (#6)
-                        let comp = weekComparison
-                        if engine.teamDeltaTrend.count >= 2 {
-                            HStack(spacing: 12) {
-                                Image(systemName: comp.improved ? "arrow.down.right.circle.fill" : "arrow.up.right.circle.fill")
-                                    .font(.title2)
-                                    .foregroundStyle(comp.improved ? Color.statusGreen : Color.statusRed)
-                                VStack(alignment: .leading, spacing: 2) {
-                                    Text("This Week vs Last Week")
-                                        .font(.caption.bold()).foregroundStyle(Color.textSecondary)
-                                    let diff = abs(comp.thisWeek - comp.lastWeek)
-                                    Text(comp.improved
-                                         ? "↓ \(String(format: "%.0f", diff))% better than last week"
-                                         : "↑ \(String(format: "%.0f", diff))% worse than last week")
-                                        .font(.subheadline.bold())
-                                        .foregroundStyle(comp.improved ? Color.statusGreen : Color.statusRed)
-                                }
-                                Spacer()
-                            }
-                            .padding(14)
-                            .background(Color.bgCard)
-                            .cornerRadius(14)
-                            .padding(.horizontal)
-                        }
-
-                        // ACL Insights — rotating prevention tips
-                        ACLInsightCard()
-                            .padding(.horizontal)
 
                         // Alert Section: At Risk athletes
                         let atRiskAthletes = engine.allReadiness.filter { $0.status == .atRisk }
@@ -1945,13 +1889,6 @@ struct DashboardView: View {
                     }
                 )
 
-                // Onboarding Walkthrough Overlay (#7)
-                if showWalkthrough {
-                    WalkthroughOverlay(step: $walkthroughStep) {
-                        showWalkthrough = false
-                        UserDefaults.standard.set(true, forKey: "hasSeenWalkthrough")
-                    }
-                }
             }
             .navigationTitle("")
             .toolbar {
@@ -1987,11 +1924,6 @@ struct DashboardView: View {
             withAnimation(.easeOut(duration: 0.4).delay(0.2)) { alertAppeared = true }
             withAnimation(.easeOut(duration: 0.4).delay(0.3)) { trendAppeared = true }
             withAnimation(.easeOut(duration: 0.4).delay(0.4)) { listAppeared = true }
-            if !UserDefaults.standard.bool(forKey: "hasSeenWalkthrough") {
-                DispatchQueue.main.asyncAfter(deadline: .now() + 0.8) {
-                    showWalkthrough = true
-                }
-            }
         }
     }
 
