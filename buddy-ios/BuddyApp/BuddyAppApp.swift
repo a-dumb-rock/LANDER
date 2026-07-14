@@ -1868,8 +1868,9 @@ struct DashboardView: View {
                             }
                             .padding(.horizontal, 16)
                             .padding(.trailing, 8)
+                            .padding(.vertical, 6)
                         }
-                        .padding(.vertical, 4)
+                        .padding(.vertical, 2)
 
                         // Athlete List
                         VStack(spacing: 10) {
@@ -5257,8 +5258,6 @@ struct FilterChip: View {
                 .foregroundStyle(active ? Color.brand : Color.textSecondary)
                 .clipShape(Capsule())
                 .overlay(Capsule().stroke(active ? Color.brand : Color.bgCardLight, lineWidth: 1))
-                .shadow(color: active ? Color.brand.opacity(0.2) : .clear, radius: 4)
-                .scaleEffect(active ? 1.05 : 1.0)
         }
         .animation(.spring(response: 0.3, dampingFraction: 0.6), value: active)
     }
