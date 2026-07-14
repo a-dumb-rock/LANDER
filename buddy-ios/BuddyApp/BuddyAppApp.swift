@@ -212,6 +212,33 @@ class DataEngine {
     var showSplash = false
     var sessionNotes: [String: String] = [:] // key: "dateInterval-isFresh"
     var capturedVideoURLs: [String: URL] = [:] // key: "athleteID-dateInterval"
+    var showProPaywall = false
+
+    // MARK: - Pro Subscription
+    var isPro: Bool {
+        get { UserDefaults.standard.bool(forKey: "landerPro") }
+        set { UserDefaults.standard.set(newValue, forKey: "landerPro") }
+    }
+
+    /// Free tier roster limit based on sport (starters only)
+    var freeAthleteLimit: Int {
+        switch sportType.lowercased() {
+        case "basketball": return 5    // 5 starters
+        case "football":   return 5    // QB, WR, RB, TE, CB
+        case "soccer":     return 5    // GK, Striker, Winger, Defender, Midfielder
+        case "volleyball": return 6    // 6 on court
+        case "track":      return 4    // small squad
+        default:           return 5
+        }
+    }
+
+    var isAtFreeLimit: Bool {
+        !isPro && athletes.count >= freeAthleteLimit
+    }
+
+    var remainingFreeSlots: Int {
+        isPro ? 999 : max(0, freeAthleteLimit - athletes.count)
+    }
 
     var hasCompletedOnboarding: Bool {
         get { UserDefaults.standard.bool(forKey: "hasCompletedOnboarding") }
@@ -1934,6 +1961,49 @@ struct AthleteDetailView: View {
                     .cornerRadius(14)
                     .padding(.horizontal)
 
+                    // Pro upsell — detailed biomechanics breakdown
+                    if !engine.isPro {
+                        Button {
+                            Haptics.medium()
+                            engine.showProPaywall = true
+                        } label: {
+                            VStack(alignment: .leading, spacing: 8) {
+                                HStack {
+                                    Image(systemName: "waveform.path.ecg")
+                                        .font(.subheadline).foregroundStyle(Color.brand)
+                                    Text("Detailed Biomechanics")
+                                        .font(.caption.bold()).foregroundStyle(.white)
+                                    Spacer()
+                                    HStack(spacing: 3) {
+                                        Image(systemName: "lock.fill").font(.system(size: 8))
+                                        Text("PRO").font(.system(size: 10, weight: .bold))
+                                    }
+                                    .foregroundStyle(Color.brand)
+                                    .padding(.horizontal, 7).padding(.vertical, 3)
+                                    .background(Color.brand.opacity(0.12))
+                                    .clipShape(Capsule())
+                                }
+                                Text("Trunk lean analysis • Ground reaction force estimates • Joint angle velocity • Fatigue curve modeling • Clinical LESS breakdown")
+                                    .font(.system(size: 11))
+                                    .foregroundStyle(.white.opacity(0.5))
+                                    .lineLimit(2)
+                                    .blur(radius: 2.5)
+                                Text("Take the next jump with LANDER →")
+                                    .font(.system(size: 11, weight: .semibold))
+                                    .foregroundStyle(Color.brand)
+                            }
+                            .padding(14)
+                            .background(Color.bgCard)
+                            .overlay(
+                                RoundedRectangle(cornerRadius: 12)
+                                    .stroke(Color.brand.opacity(0.2), lineWidth: 1)
+                            )
+                            .cornerRadius(12)
+                        }
+                        .buttonStyle(.plain)
+                        .padding(.horizontal)
+                    }
+
                     // Injury Notes
                     if let athlete = engine.athletes.first(where: { $0.id == athleteID }) {
                         VStack(alignment: .leading, spacing: 10) {
@@ -2158,6 +2228,13 @@ struct AthleteDetailView: View {
             if let url = videoPlayerURL {
                 VideoPlayerSheet(url: url)
             }
+        }
+        .fullScreenCover(isPresented: Binding(
+            get: { engine.showProPaywall },
+            set: { engine.showProPaywall = $0 }
+        )) {
+            ProPaywallView(triggerReason: .deeperAnalysis)
+                .environment(engine)
         }
     }
 }
@@ -2603,6 +2680,13 @@ struct CaptureFlowView: View {
                     }
                 )
             }
+            .fullScreenCover(isPresented: Binding(
+                get: { engine.showProPaywall },
+                set: { engine.showProPaywall = $0 }
+            )) {
+                ProPaywallView(triggerReason: .deeperAnalysis)
+                    .environment(engine)
+            }
         }
     }
 
@@ -2925,6 +3009,50 @@ struct CaptureFlowView: View {
                 }
             }
 
+            // Pro upsell — deeper AI analysis teaser
+            if !engine.isPro {
+                Button {
+                    Haptics.medium()
+                    engine.showProPaywall = true
+                } label: {
+                    VStack(alignment: .leading, spacing: 10) {
+                        HStack {
+                            Image(systemName: "brain.head.profile")
+                                .font(.title3).foregroundStyle(Color.brand)
+                            Text("AI Movement Report")
+                                .font(.subheadline.bold()).foregroundStyle(.white)
+                            Spacer()
+                            HStack(spacing: 4) {
+                                Image(systemName: "lock.fill").font(.system(size: 9))
+                                Text("PRO").font(.caption2.bold())
+                            }
+                            .foregroundStyle(Color.brand)
+                            .padding(.horizontal, 8).padding(.vertical, 4)
+                            .background(Color.brand.opacity(0.15))
+                            .clipShape(Capsule())
+                        }
+                        // Blurred fake analysis text
+                        Text("Knee valgus increases 14° during deceleration suggesting medial stabilizer weakness. Asymmetry pattern detected across sessions. Recommend reducing plyometric load...")
+                            .font(.system(size: 12))
+                            .foregroundStyle(.white.opacity(0.6))
+                            .lineLimit(3)
+                            .blur(radius: 3.5)
+                        
+                        Text("Take the next jump with LANDER →")
+                            .font(.caption.bold())
+                            .foregroundStyle(Color.brand)
+                    }
+                    .padding(14)
+                    .background(Color.bgCard)
+                    .overlay(
+                        RoundedRectangle(cornerRadius: 12)
+                            .stroke(Color.brand.opacity(0.25), lineWidth: 1)
+                    )
+                    .cornerRadius(12)
+                }
+                .buttonStyle(.plain)
+            }
+
             Button {
                 Haptics.medium()
                 // Save session notes
@@ -3097,6 +3225,28 @@ struct RosterView: View {
                         .padding(.horizontal).padding(.top, 8)
                         .opacity(appeared ? 1 : 0)
                         .offset(y: appeared ? 0 : 10)
+
+                        // Roster limit indicator (free tier)
+                        if !engine.isPro {
+                            HStack(spacing: 8) {
+                                Image(systemName: "person.3.fill")
+                                    .font(.caption).foregroundStyle(Color.textSecondary)
+                                Text("\(engine.athletes.count)/\(engine.freeAthleteLimit) starters")
+                                    .font(.caption.bold()).foregroundStyle(Color.textSecondary)
+                                Spacer()
+                                if engine.isAtFreeLimit {
+                                    HStack(spacing: 4) {
+                                        Image(systemName: "lock.fill").font(.system(size: 9))
+                                        Text("Upgrade for more").font(.caption2.bold())
+                                    }
+                                    .foregroundStyle(Color.brand)
+                                } else {
+                                    Text("\(engine.remainingFreeSlots) slots left")
+                                        .font(.caption2).foregroundStyle(Color.textSecondary.opacity(0.7))
+                                }
+                            }
+                            .padding(.horizontal, 20).padding(.top, 12)
+                        }
                     }
                 }
             }
@@ -3104,7 +3254,14 @@ struct RosterView: View {
             .navigationDestination(for: UUID.self) { id in AthleteDetailView(athleteID: id) }
             .toolbar {
                 ToolbarItem(placement: .topBarTrailing) {
-                    Button { showingAdd = true } label: {
+                    Button {
+                        if engine.isAtFreeLimit {
+                            Haptics.warning()
+                            engine.showProPaywall = true
+                        } else {
+                            showingAdd = true
+                        }
+                    } label: {
                         Image(systemName: "plus.circle.fill")
                             .font(.title3).foregroundStyle(Color.brand)
                     }
@@ -3115,6 +3272,13 @@ struct RosterView: View {
                     engine.addAthlete(name: newName, jersey: Int(newJersey) ?? 0, position: newPosition, photoData: photoData)
                     newName = ""; newJersey = ""; newPosition = ""; showingAdd = false
                 } onCancel: { showingAdd = false }
+            }
+            .fullScreenCover(isPresented: Binding(
+                get: { engine.showProPaywall },
+                set: { engine.showProPaywall = $0 }
+            )) {
+                ProPaywallView(triggerReason: .rosterLimit)
+                    .environment(engine)
             }
             .onAppear {
                 withAnimation(.easeOut(duration: 0.4)) { appeared = true }
@@ -3367,6 +3531,226 @@ struct SessionDetailSheet: View {
 }
 
 
+// MARK: - Pro Paywall
+struct ProPaywallView: View {
+    @Environment(DataEngine.self) private var engine
+    @State private var appeared = false
+    @State private var shimmer = false
+    var triggerReason: ProTrigger = .rosterLimit
+
+    enum ProTrigger {
+        case rosterLimit
+        case deeperAnalysis
+        case general
+
+        var headline: String {
+            switch self {
+            case .rosterLimit: return "Roster Full"
+            case .deeperAnalysis: return "Unlock Deeper Insights"
+            case .general: return "Go Pro"
+            }
+        }
+        var subtitle: String {
+            switch self {
+            case .rosterLimit: return "Free plan covers your starters. Upgrade to track your full squad."
+            case .deeperAnalysis: return "Get AI-powered movement reports, detailed biomechanics breakdowns, and clinical-grade analysis."
+            case .general: return "Unlock the full LANDER experience for your entire team."
+            }
+        }
+    }
+
+    var body: some View {
+        ZStack {
+            Color.bgPrimary.ignoresSafeArea()
+
+            VStack(spacing: 0) {
+                // Close button
+                HStack {
+                    Spacer()
+                    Button {
+                        engine.showProPaywall = false
+                    } label: {
+                        Image(systemName: "xmark.circle.fill")
+                            .font(.title2)
+                            .foregroundStyle(Color.textSecondary)
+                    }
+                    .padding(20)
+                }
+
+                ScrollView {
+                    VStack(spacing: 28) {
+                        // Logo + Pro badge
+                        VStack(spacing: 14) {
+                            ZStack {
+                                Circle()
+                                    .fill(Color.brand.opacity(0.1))
+                                    .frame(width: 90, height: 90)
+                                LanderDiamond()
+                                    .frame(width: 36, height: 47)
+                            }
+                            .shadow(color: Color.brand.opacity(0.3), radius: 16)
+
+                            HStack(spacing: 6) {
+                                Text("LANDER")
+                                    .font(.system(size: 22, weight: .black))
+                                    .foregroundStyle(.white)
+                                Text("PRO")
+                                    .font(.system(size: 22, weight: .black))
+                                    .foregroundStyle(Color.brand)
+                            }
+                        }
+
+                        // Trigger-specific headline
+                        VStack(spacing: 8) {
+                            Text(triggerReason.headline)
+                                .font(.title3.bold())
+                                .foregroundStyle(.white)
+                            Text(triggerReason.subtitle)
+                                .font(.subheadline)
+                                .foregroundStyle(Color.textSecondary)
+                                .multilineTextAlignment(.center)
+                                .padding(.horizontal, 24)
+                        }
+
+                        // Blurred teaser content
+                        VStack(spacing: 12) {
+                            ProBlurredTeaser(text: "Left knee valgus increases 14° during deceleration phase under fatigue, suggesting medial collateral weakness...")
+                            ProBlurredTeaser(text: "Asymmetry index 18% — right-side dominant compensatory pattern detected across 3 consecutive sessions...")
+                            ProBlurredTeaser(text: "Recommendation: Reduce plyometric volume 30% this week. Schedule bilateral strength assessment...")
+                        }
+                        .padding(.horizontal, 20)
+
+                        // "Take the next jump" tagline
+                        Text("Take the next jump with LANDER")
+                            .font(.system(size: 15, weight: .semibold))
+                            .foregroundStyle(Color.brand)
+                            .padding(.top, 4)
+
+                        // Feature list
+                        VStack(alignment: .leading, spacing: 14) {
+                            ProFeatureRow(icon: "person.3.fill", text: "Unlimited athletes on your roster")
+                            ProFeatureRow(icon: "brain.head.profile", text: "AI-powered movement analysis reports")
+                            ProFeatureRow(icon: "chart.line.uptrend.xyaxis", text: "Season-long trend tracking")
+                            ProFeatureRow(icon: "doc.richtext", text: "Clinical-grade PDF exports")
+                            ProFeatureRow(icon: "bell.badge.fill", text: "Smart injury prediction alerts")
+                            ProFeatureRow(icon: "video.badge.checkmark", text: "Deeper frame-by-frame biomechanics")
+                        }
+                        .padding(.horizontal, 28)
+
+                        // Price + Subscribe button
+                        VStack(spacing: 12) {
+                            Button {
+                                Haptics.success()
+                                // TODO: StoreKit integration — for now simulate purchase
+                                withAnimation(.spring(response: 0.4, dampingFraction: 0.7)) {
+                                    engine.isPro = true
+                                    engine.showProPaywall = false
+                                }
+                            } label: {
+                                VStack(spacing: 4) {
+                                    Text("Upgrade to Pro")
+                                        .font(.headline)
+                                    Text("$0.99/month")
+                                        .font(.caption)
+                                        .opacity(0.8)
+                                }
+                                .frame(maxWidth: .infinity).padding(16)
+                                .background(
+                                    LinearGradient(
+                                        colors: [Color.brand, Color.brand.opacity(0.8)],
+                                        startPoint: .leading, endPoint: .trailing
+                                    )
+                                )
+                                .foregroundStyle(.black)
+                                .cornerRadius(14)
+                                .shadow(color: Color.brand.opacity(0.4), radius: 12, y: 4)
+                                .overlay(
+                                    RoundedRectangle(cornerRadius: 14)
+                                        .fill(
+                                            LinearGradient(
+                                                colors: [.white.opacity(shimmer ? 0.3 : 0), .clear],
+                                                startPoint: .leading, endPoint: .trailing
+                                            )
+                                        )
+                                        .animation(.easeInOut(duration: 1.5).repeatForever(autoreverses: true), value: shimmer)
+                                )
+                            }
+                            .padding(.horizontal, 28)
+
+                            Button {
+                                engine.showProPaywall = false
+                            } label: {
+                                Text("Maybe Later")
+                                    .font(.subheadline)
+                                    .foregroundStyle(Color.textSecondary)
+                            }
+
+                            Text("Cancel anytime • No commitment")
+                                .font(.caption2)
+                                .foregroundStyle(Color.textSecondary.opacity(0.6))
+                        }
+
+                        Spacer().frame(height: 40)
+                    }
+                }
+            }
+        }
+        .opacity(appeared ? 1 : 0)
+        .onAppear {
+            withAnimation(.easeOut(duration: 0.3)) { appeared = true }
+            shimmer = true
+        }
+    }
+}
+
+// MARK: - Pro Paywall Helpers
+struct ProBlurredTeaser: View {
+    let text: String
+    var body: some View {
+        Text(text)
+            .font(.system(size: 13))
+            .foregroundStyle(.white.opacity(0.7))
+            .lineLimit(2)
+            .padding(14)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .background(Color.bgCard)
+            .cornerRadius(12)
+            .blur(radius: 4)
+            .overlay(
+                RoundedRectangle(cornerRadius: 12)
+                    .stroke(Color.brand.opacity(0.2), lineWidth: 1)
+            )
+            .overlay(
+                HStack(spacing: 6) {
+                    Image(systemName: "lock.fill").font(.caption)
+                    Text("Pro").font(.caption.bold())
+                }
+                .foregroundStyle(Color.brand)
+                .padding(.horizontal, 10).padding(.vertical, 5)
+                .background(Color.bgPrimary.opacity(0.9))
+                .cornerRadius(8)
+            )
+    }
+}
+
+struct ProFeatureRow: View {
+    let icon: String
+    let text: String
+    var body: some View {
+        HStack(spacing: 12) {
+            Image(systemName: icon)
+                .font(.system(size: 15))
+                .foregroundStyle(Color.brand)
+                .frame(width: 24)
+            Text(text)
+                .font(.subheadline)
+                .foregroundStyle(.white)
+            Spacer()
+        }
+    }
+}
+
+
 // MARK: - Settings (Complete)
 struct SettingsView: View {
     @Environment(DataEngine.self) private var engine
@@ -3442,6 +3826,44 @@ struct SettingsView: View {
                             }.padding(14)
                         }
 
+                        // Subscription
+                        SettingsSection(title: "SUBSCRIPTION") {
+                            if engine.isPro {
+                                HStack {
+                                    Image(systemName: "crown.fill").foregroundStyle(Color.brand).frame(width: 24)
+                                    VStack(alignment: .leading, spacing: 2) {
+                                        Text("LANDER Pro").font(.subheadline.bold()).foregroundStyle(.white)
+                                        Text("Active — $0.99/month").font(.caption).foregroundStyle(Color.statusGreen)
+                                    }
+                                    Spacer()
+                                    Button {
+                                        engine.isPro = false
+                                    } label: {
+                                        Text("Cancel").font(.caption.bold())
+                                            .foregroundStyle(Color.statusRed)
+                                    }
+                                }.padding(14)
+                            } else {
+                                Button {
+                                    engine.showProPaywall = true
+                                } label: {
+                                    HStack {
+                                        Image(systemName: "crown.fill").foregroundStyle(Color.brand).frame(width: 24)
+                                        VStack(alignment: .leading, spacing: 2) {
+                                            Text("LANDER Pro").font(.subheadline.bold()).foregroundStyle(.white)
+                                            Text("Unlimited athletes + AI reports").font(.caption).foregroundStyle(Color.textSecondary)
+                                        }
+                                        Spacer()
+                                        Text("$0.99/mo").font(.caption.bold())
+                                            .padding(.horizontal, 8).padding(.vertical, 4)
+                                            .background(Color.brand.opacity(0.15))
+                                            .foregroundStyle(Color.brand)
+                                            .clipShape(Capsule())
+                                    }.padding(14)
+                                }
+                            }
+                        }
+
                         // About
                         SettingsSection(title: "ABOUT") {
                             SettingsRow(icon: "info.circle", label: "Version") {
@@ -3494,6 +3916,13 @@ struct SettingsView: View {
                     engine.hasCompletedOnboarding = false
                 }
             } message: { Text("You'll need to sign in again to access your data.") }
+            .fullScreenCover(isPresented: Binding(
+                get: { engine.showProPaywall },
+                set: { engine.showProPaywall = $0 }
+            )) {
+                ProPaywallView(triggerReason: .general)
+                    .environment(engine)
+            }
         }
     }
 }
