@@ -1,5 +1,4 @@
 import SwiftUI
-import AuthenticationServices
 import AVFoundation
 import AVKit
 import UserNotifications
@@ -1252,7 +1251,7 @@ struct LanderDiamond: View {
 }
 
 
-// MARK: - Onboarding (Sign In)
+// MARK: - Onboarding (Welcome)
 struct OnboardingView: View {
     @Environment(DataEngine.self) private var engine
     @State private var logoScale: CGFloat = 0.8
@@ -1261,11 +1260,12 @@ struct OnboardingView: View {
     var body: some View {
         ZStack {
             Color.bgPrimary.ignoresSafeArea()
-            // Subtle radial gradient glow behind logo
             RadialGradient(colors: [Color.brand.opacity(0.08), .clear], center: .center, startRadius: 20, endRadius: 250)
                 .ignoresSafeArea()
-            VStack(spacing: 28) {
+            VStack(spacing: 0) {
                 Spacer()
+
+                // Logo + Branding
                 VStack(spacing: 12) {
                     LanderDiamond()
                         .frame(width: 60, height: 78)
@@ -1277,54 +1277,65 @@ struct OnboardingView: View {
                     Text("BUDDY")
                         .font(.system(size: 20, weight: .semibold))
                         .foregroundStyle(Color.brand)
-                    Text("Spot injury risk before it happens")
+                    Text("Catch ACL risk before it happens")
                         .font(.subheadline)
                         .foregroundStyle(Color.textSecondary)
                         .padding(.top, 4)
                 }
+
                 Spacer()
+
+                // Action Buttons
                 VStack(spacing: 14) {
-                    SignInWithAppleButton(.signIn) { _ in } onCompletion: { _ in
-                        triggerSignIn()
+                    // Primary: Get Started (clean slate)
+                    Button {
+                        Haptics.success()
+                        engine.isSignedIn = true
+                    } label: {
+                        Text("Get Started")
+                            .font(.headline)
+                            .frame(maxWidth: .infinity).frame(height: 52)
+                            .background(Color.brand)
+                            .foregroundStyle(.black)
+                            .cornerRadius(14)
                     }
-                    .signInWithAppleButtonStyle(.white)
-                    .frame(height: 52)
-                    .cornerRadius(14)
                     .padding(.horizontal, 36)
 
-                    Button { triggerSignIn() } label: {
-                        HStack(spacing: 8) {
-                            Image(systemName: "g.circle.fill").font(.title3)
-                            Text("Continue with Google").font(.subheadline.bold())
-                        }
-                        .frame(maxWidth: .infinity).frame(height: 52)
-                        .background(Color.bgCard).cornerRadius(14)
-                        .foregroundStyle(.white)
-                    }.padding(.horizontal, 36)
-
-                    Button("Skip — use demo data") {
+                    // Secondary: Try with demo data
+                    Button {
+                        Haptics.medium()
                         engine.loadDemoData()
                         engine.hasCompletedOnboarding = true
                         engine.showSplash = true
                         engine.isSignedIn = true
+                    } label: {
+                        Text("Explore with Demo Data")
+                            .font(.subheadline.bold())
+                            .frame(maxWidth: .infinity).frame(height: 52)
+                            .background(Color.bgCard)
+                            .foregroundStyle(.white)
+                            .cornerRadius(14)
+                            .overlay(
+                                RoundedRectangle(cornerRadius: 14)
+                                    .stroke(Color.bgCardLight, lineWidth: 1)
+                            )
                     }
-                    .font(.footnote).foregroundStyle(Color.textSecondary)
-                    .padding(.top, 4)
+                    .padding(.horizontal, 36)
+
+                    Text("No account needed — all data stays on your device")
+                        .font(.caption2)
+                        .foregroundStyle(Color.textSecondary.opacity(0.6))
+                        .padding(.top, 4)
                 }
                 .opacity(contentOpacity)
-                Spacer().frame(height: 50)
+
+                Spacer().frame(height: 60)
             }
         }
         .onAppear {
             withAnimation(.spring(response: 0.8, dampingFraction: 0.6)) { logoScale = 1.0 }
             withAnimation(.easeIn(duration: 0.5).delay(0.3)) { contentOpacity = 1.0 }
         }
-    }
-
-    private func triggerSignIn() {
-        Haptics.success()
-        engine.showSplash = true
-        engine.isSignedIn = true
     }
 }
 
@@ -3327,12 +3338,15 @@ struct CaptureFlowView: View {
     private var captureStep4: some View {
         ZStack {
             VStack(alignment: .leading, spacing: 16) {
-                HStack {
+                // Success header with risk indicator
+                HStack(spacing: 12) {
                     Image(systemName: "checkmark.seal.fill").font(.title2).foregroundStyle(Color.statusGreen)
-                    Text("Analysis Complete").font(.headline).foregroundStyle(.white)
+                    VStack(alignment: .leading, spacing: 2) {
+                        Text("Analysis Complete").font(.headline).foregroundStyle(.white)
+                        Text(isFresh ? "Fresh baseline recorded" : "Fatigued — comparing to baseline")
+                            .font(.caption).foregroundStyle(Color.textSecondary)
+                    }
                 }
-                Text(isFresh ? "Fresh baseline session recorded successfully." : "Fatigued session — showing delta vs baseline.")
-                    .font(.caption).foregroundStyle(Color.textSecondary)
 
             // Capture quality tip card
             if captureItems.contains(where: { $0.captureQuality == .poor }) {
