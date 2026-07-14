@@ -202,7 +202,6 @@ enum CVModelService {
 
 
 // MARK: - StoreKit 2 Subscription Manager
-@Observable
 class SubscriptionManager {
     static let shared = SubscriptionManager()
     static let proMonthlyID = "com.lander.buddy.pro.monthly"
@@ -280,7 +279,7 @@ class SubscriptionManager {
     func checkEntitlements() async {
         for await result in Transaction.currentEntitlements {
             if case .verified(let transaction) = result {
-                if transaction.productID == Self.proMonthlyID && !transaction.isExpired {
+                if transaction.productID == Self.proMonthlyID && !isTransactionExpired(transaction) {
                     isProActive = true
                     return
                 }
@@ -295,7 +294,7 @@ class SubscriptionManager {
             if case .verified(let transaction) = result {
                 await transaction.finish()
                 await MainActor.run {
-                    isProActive = transaction.productID == Self.proMonthlyID && !transaction.isExpired
+                    isProActive = transaction.productID == Self.proMonthlyID && !isTransactionExpired(transaction)
                 }
             }
         }
@@ -311,11 +310,9 @@ class SubscriptionManager {
     enum StoreError: Error { case unverified }
 }
 
-extension Transaction {
-    var isExpired: Bool {
-        guard let expirationDate else { return false }
-        return expirationDate < Date()
-    }
+private func isTransactionExpired(_ transaction: Transaction) -> Bool {
+    guard let expirationDate = transaction.expirationDate else { return false }
+    return expirationDate < Date()
 }
 
 
@@ -1374,16 +1371,28 @@ struct FloatingTextField: View {
 // MARK: - Main Tab View
 struct MainTabView: View {
     @State private var appeared = false
+    @State private var selectedTab = 0
     var body: some View {
-        TabView {
-            DashboardView().tabItem { Label("Home", systemImage: "house.fill") }
-            RosterView().tabItem { Label("Roster", systemImage: "person.3.fill") }
-            CaptureFlowView().tabItem { Label("Capture", systemImage: "camera.circle.fill") }
-            HistoryView().tabItem { Label("History", systemImage: "clock.fill") }
-            SettingsView().tabItem { Label("Settings", systemImage: "gearshape.fill") }
+        TabView(selection: $selectedTab) {
+            DashboardView()
+                .tabItem { Label("Home", systemImage: "house.fill") }
+                .tag(0)
+            RosterView()
+                .tabItem { Label("Roster", systemImage: "person.3.fill") }
+                .tag(1)
+            CaptureFlowView()
+                .tabItem { Label("Capture", systemImage: "camera.circle.fill") }
+                .tag(2)
+            HistoryView()
+                .tabItem { Label("History", systemImage: "clock.fill") }
+                .tag(3)
+            SettingsView()
+                .tabItem { Label("Settings", systemImage: "gearshape.fill") }
+                .tag(4)
         }
         .tint(Color.brand)
         .opacity(appeared ? 1.0 : 0.0)
+        .onChange(of: selectedTab) { _, _ in Haptics.light() } // 1. Haptic on tab switch
         .onAppear {
             withAnimation(.easeInOut(duration: 0.4)) { appeared = true }
             let appearance = UITabBarAppearance()
@@ -1395,12 +1404,13 @@ struct MainTabView: View {
     }
 }
 
-// MARK: - Card Press Style
+// MARK: - Card Press Style (2. Better bounce feedback)
 struct CardPressStyle: ButtonStyle {
     func makeBody(configuration: Configuration) -> some View {
         configuration.label
-            .scaleEffect(configuration.isPressed ? 0.97 : 1.0)
-            .animation(.spring(response: 0.2, dampingFraction: 0.7), value: configuration.isPressed)
+            .scaleEffect(configuration.isPressed ? 0.96 : 1.0)
+            .opacity(configuration.isPressed ? 0.9 : 1.0)
+            .animation(.spring(response: 0.25, dampingFraction: 0.6, blendDuration: 0.1), value: configuration.isPressed)
     }
 }
 
@@ -1475,7 +1485,7 @@ struct TrendBadge: View {
 }
 
 
-// MARK: - Sparkline (Inverted Y: higher = worse = down)
+// MARK: - Sparkline (7. Enhanced with glowing endpoint)
 struct SparklineView: View {
     let points: [Double]
     let color: Color
@@ -1484,14 +1494,25 @@ struct SparklineView: View {
             if points.count > 1 {
                 let mn = points.min()!; let mx = points.max()!
                 let range = mx - mn == 0 ? 1 : mx - mn
-                Path { path in
-                    for (i, val) in points.enumerated() {
-                        let x = geo.size.width * CGFloat(i) / CGFloat(points.count - 1)
-                        let y = geo.size.height * CGFloat((val - mn) / range)
-                        if i == 0 { path.move(to: CGPoint(x: x, y: y)) }
-                        else { path.addLine(to: CGPoint(x: x, y: y)) }
-                    }
-                }.stroke(color, lineWidth: 1.8)
+                ZStack {
+                    Path { path in
+                        for (i, val) in points.enumerated() {
+                            let x = geo.size.width * CGFloat(i) / CGFloat(points.count - 1)
+                            let y = geo.size.height * CGFloat((val - mn) / range)
+                            if i == 0 { path.move(to: CGPoint(x: x, y: y)) }
+                            else { path.addLine(to: CGPoint(x: x, y: y)) }
+                        }
+                    }.stroke(color, lineWidth: 1.8)
+                    
+                    // Glowing dot at end point
+                    let lastX = geo.size.width
+                    let lastY = geo.size.height * CGFloat((points.last! - mn) / range)
+                    Circle()
+                        .fill(color)
+                        .frame(width: 5, height: 5)
+                        .shadow(color: color.opacity(0.6), radius: 3)
+                        .position(x: lastX, y: lastY)
+                }
             }
         }
     }
@@ -1882,9 +1903,17 @@ struct DashboardView: View {
                     .id(refreshID)
                 }
                 .refreshable {
+                    Haptics.medium() // 3. Pull-to-refresh haptic
                     refreshID = UUID()
                 }
-                .background(Color.bgPrimary)
+                .background(
+                    ZStack {
+                        Color.bgPrimary
+                        // 10. Subtle radial gradient for premium feel
+                        RadialGradient(colors: [Color.brand.opacity(0.03), .clear],
+                                       center: .top, startRadius: 0, endRadius: 400)
+                    }
+                )
 
                 // Onboarding Walkthrough Overlay (#7)
                 if showWalkthrough {
@@ -2029,6 +2058,7 @@ struct HeroScoreCard: View {
     let score: Int
     let summary: (good: Int, caution: Int, atRisk: Int)
     @State private var ringProgress: CGFloat = 0
+    @State private var displayedScore: Int = 0
 
     var body: some View {
         VStack(spacing: 14) {
@@ -2051,8 +2081,8 @@ struct HeroScoreCard: View {
                     .frame(width: 110, height: 110)
                     .rotationEffect(.degrees(-90))
                     .shadow(color: Color.brand.opacity(0.5), radius: 8)
-                // Score number
-                Text("\(score)")
+                // 8. Animated score counter
+                Text("\(displayedScore)")
                     .font(.system(size: 38, weight: .black, design: .rounded))
                     .foregroundStyle(.white)
             }
@@ -2082,6 +2112,13 @@ struct HeroScoreCard: View {
         .onAppear {
             withAnimation(.easeOut(duration: 1.0).delay(0.3)) {
                 ringProgress = CGFloat(score) / 100.0
+            }
+            // 8. Animated score counter
+            let steps = 20
+            for i in 0...steps {
+                DispatchQueue.main.asyncAfter(deadline: .now() + 0.3 + Double(i) * 0.04) {
+                    displayedScore = Int(Double(score) * Double(i) / Double(steps))
+                }
             }
         }
     }
@@ -2191,7 +2228,7 @@ struct AthleteDetailView: View {
         ScrollView {
             if let r = r {
                 VStack(spacing: 18) {
-                    // Sticky Header
+                    // 6. Gradient header behind avatar
                     VStack(spacing: 10) {
                         if let athlete = engine.athletes.first(where: { $0.id == athleteID }) {
                             PhotosPicker(selection: $selectedPhoto, matching: .images) {
@@ -2884,10 +2921,8 @@ struct CaptureFlowView: View {
                     // Step label with animated transition
                     HStack {
                         Text(stepTitle).font(.caption.bold()).foregroundStyle(Color.brand)
-                            .contentTransition(.numericText())
                         Spacer()
                         Text("Step \(step) of 4").font(.caption).foregroundStyle(Color.textSecondary)
-                            .contentTransition(.numericText())
                     }
                     .padding(.horizontal).padding(.top, 8)
                     .animation(.easeOut(duration: 0.3), value: step)
@@ -3478,12 +3513,22 @@ struct ConditionButton: View {
     }
 }
 
+// 4. Enhanced MetricPill with background and better spacing
 struct MetricPill: View {
     let label: String; let value: String; let color: Color
+    @State private var appeared = false
     var body: some View {
-        VStack(spacing: 3) {
-            Text(label).font(.system(size: 9)).foregroundStyle(Color.textSecondary)
-            Text(value).font(.caption.bold()).foregroundStyle(color)
+        VStack(spacing: 4) {
+            Text(label).font(.system(size: 9, weight: .medium)).foregroundStyle(Color.textSecondary)
+            Text(value).font(.system(size: 13, weight: .bold, design: .rounded)).foregroundStyle(color)
+        }
+        .padding(.horizontal, 10).padding(.vertical, 8)
+        .background(color.opacity(0.08))
+        .cornerRadius(10)
+        .scaleEffect(appeared ? 1.0 : 0.8)
+        .opacity(appeared ? 1.0 : 0)
+        .onAppear {
+            withAnimation(.spring(response: 0.4, dampingFraction: 0.6).delay(0.1)) { appeared = true }
         }
     }
 }
@@ -3503,11 +3548,32 @@ struct RosterView: View {
             ZStack {
                 Color.bgPrimary.ignoresSafeArea()
                 if engine.athletes.isEmpty {
-                    VStack(spacing: 14) {
+                    VStack(spacing: 18) {
+                        Spacer()
+                        // 5. Better empty state with animated icon
                         Image(systemName: "figure.run.circle")
-                            .font(.system(size: 52)).foregroundStyle(Color.textSecondary.opacity(0.5))
-                        Text("No athletes yet").font(.headline).foregroundStyle(Color.textSecondary)
-                        Text("Tap + to add your first athlete").font(.caption).foregroundStyle(Color.textSecondary.opacity(0.7))
+                            .font(.system(size: 64)).foregroundStyle(Color.brand.opacity(0.4))
+                            .shadow(color: Color.brand.opacity(0.2), radius: 12)
+                        Text("No athletes yet").font(.title3.bold()).foregroundStyle(.white)
+                        Text("Tap + above to add your first athlete\nand start tracking their landing mechanics")
+                            .font(.subheadline)
+                            .foregroundStyle(Color.textSecondary)
+                            .multilineTextAlignment(.center)
+                            .padding(.horizontal, 40)
+                        Button {
+                            showingAdd = true
+                        } label: {
+                            HStack(spacing: 8) {
+                                Image(systemName: "plus.circle.fill")
+                                Text("Add First Athlete")
+                            }
+                            .font(.subheadline.bold())
+                            .padding(.horizontal, 24).padding(.vertical, 12)
+                            .background(Color.brand.opacity(0.15))
+                            .foregroundStyle(Color.brand)
+                            .cornerRadius(12)
+                        }
+                        Spacer()
                     }
                 } else {
                     ScrollView {
@@ -4406,7 +4472,7 @@ struct ComparisonChartView: View {
 }
 
 
-// MARK: - Filter Chip
+// 9. Enhanced FilterChip with animation
 struct FilterChip: View {
     let label: String
     let active: Bool
@@ -4419,7 +4485,10 @@ struct FilterChip: View {
                 .foregroundStyle(active ? Color.brand : Color.textSecondary)
                 .clipShape(Capsule())
                 .overlay(Capsule().stroke(active ? Color.brand : Color.bgCardLight, lineWidth: 1))
+                .shadow(color: active ? Color.brand.opacity(0.2) : .clear, radius: 4)
+                .scaleEffect(active ? 1.05 : 1.0)
         }
+        .animation(.spring(response: 0.3, dampingFraction: 0.6), value: active)
     }
 }
 
