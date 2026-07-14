@@ -3362,6 +3362,33 @@ struct CaptureFlowView: View {
                             }.padding(.top, 4)
                         }
                     }.padding(14).background(Color.bgCard).cornerRadius(12)
+                } else if item.done {
+                    // Detection failed — no body detected
+                    VStack(alignment: .leading, spacing: 10) {
+                        Text(item.name).font(.subheadline.bold()).foregroundStyle(.white)
+                        HStack(spacing: 10) {
+                            Image(systemName: "figure.stand.line.dotted.figure.stand")
+                                .font(.title2).foregroundStyle(Color.statusRed)
+                            VStack(alignment: .leading, spacing: 4) {
+                                Text("Body Not Detected")
+                                    .font(.caption.bold()).foregroundStyle(Color.statusRed)
+                                Text("Could not detect a full body pose in this video. Make sure the athlete is fully visible (head to feet), facing the camera, and well-lit.")
+                                    .font(.system(size: 11))
+                                    .foregroundStyle(Color.textSecondary)
+                                    .lineLimit(3)
+                            }
+                        }
+                        Text("No data was saved — retake the video to get real results.")
+                            .font(.system(size: 10, weight: .medium))
+                            .foregroundStyle(Color.statusYellow)
+                    }
+                    .padding(14)
+                    .background(Color.statusRed.opacity(0.06))
+                    .overlay(
+                        RoundedRectangle(cornerRadius: 12)
+                            .stroke(Color.statusRed.opacity(0.3), lineWidth: 1)
+                    )
+                    .cornerRadius(12)
                 }
             }
 
@@ -3511,15 +3538,10 @@ struct CaptureFlowView: View {
                             captureItems[captureIndex].resultMetrics = metrics
                             persistResults(index: captureIndex, valgus: metrics.valgusAngle)
                         } else {
-                            // Vision couldn't detect pose — fallback to mock + mark as poor quality
+                            // Vision couldn't detect full body pose — reject, don't fake it
                             captureItems[captureIndex].captureQuality = .poor
-                            let valgus = Double.random(in: 5.5...10.5)
-                            captureItems[captureIndex].resultMetrics = ModelMetrics(
-                                valgusAngle: valgus, kneeFlexionAngle: Double.random(in: 48...62),
-                                trunkLean: Double.random(in: 3...12), asymmetry: Double.random(in: 2...15),
-                                lessScore: Int.random(in: 2...8)
-                            )
-                            persistResults(index: captureIndex, valgus: valgus)
+                            captureItems[captureIndex].resultMetrics = nil
+                            Haptics.warning()
                         }
 
                         if captureItems.allSatisfy(\.done) { Haptics.success() }
