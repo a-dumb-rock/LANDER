@@ -1813,57 +1813,6 @@ struct DashboardView: View {
                             .padding(14).background(Color.bgCard).cornerRadius(14)
                         }.padding(.horizontal)
 
-                        // Last Capture + Streak Card
-                        HStack(spacing: 12) {
-                            // Days since last capture
-                            VStack(spacing: 6) {
-                                let days = engine.daysSinceLastCapture
-                                Text("\(days)")
-                                    .font(.system(size: 28, weight: .black, design: .rounded))
-                                    .foregroundStyle(days > 4 ? Color.statusRed : days > 2 ? Color.statusYellow : Color.statusGreen)
-                                Text("days since\nlast capture")
-                                    .font(.system(size: 10))
-                                    .foregroundStyle(Color.textSecondary)
-                                    .multilineTextAlignment(.center)
-                            }
-                            .frame(maxWidth: .infinity)
-                            .padding(14)
-                            .background(Color.bgCard)
-                            .cornerRadius(14)
-
-                            // Weekly streak
-                            VStack(spacing: 6) {
-                                HStack(spacing: 4) {
-                                    Text("\(engine.weeklyStreak)")
-                                        .font(.system(size: 28, weight: .black, design: .rounded))
-                                        .foregroundStyle(Color.brand)
-                                    Image(systemName: "flame.fill")
-                                        .font(.system(size: 16))
-                                        .foregroundStyle(engine.weeklyStreak >= 3 ? Color.brand : Color.textSecondary)
-                                }
-                                Text("week streak")
-                                    .font(.system(size: 10))
-                                    .foregroundStyle(Color.textSecondary)
-                            }
-                            .frame(maxWidth: .infinity)
-                            .padding(14)
-                            .background(Color.bgCard)
-                            .cornerRadius(14)
-
-                            // Team Pulse
-                            VStack(spacing: 6) {
-                                TeamPulseIndicator()
-                                Text("team pulse")
-                                    .font(.system(size: 10))
-                                    .foregroundStyle(Color.textSecondary)
-                            }
-                            .frame(maxWidth: .infinity)
-                            .padding(14)
-                            .background(Color.bgCard)
-                            .cornerRadius(14)
-                        }
-                        .padding(.horizontal)
-
                         // Weekly Comparison Card (#6)
                         let comp = weekComparison
                         if engine.teamDeltaTrend.count >= 2 {
