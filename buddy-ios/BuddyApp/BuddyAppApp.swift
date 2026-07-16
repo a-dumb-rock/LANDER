@@ -2758,12 +2758,155 @@ struct SessionHistoryRow: View {
     }
 }
 
-// MARK: - Video Player
+// MARK: - Video Player with Skeleton Overlay
 struct VideoPlayerSheet: View {
     let url: URL
+    @State private var showSkeleton = true
+    @State private var currentFrame: CGImage? = nil
+    @State private var bodyPoints: [CGPoint] = []
+    @State private var isPlaying = true
+    @State private var analysisTimer: Timer? = nil
+    @State private var player: AVPlayer? = nil
+
+    // Body connections for drawing skeleton lines
+    private let connections: [(Int, Int)] = [
+        (0, 1),   // nose to neck (approximated)
+        (1, 2), (2, 3), (3, 4),     // left arm
+        (1, 5), (5, 6), (6, 7),     // right arm
+        (1, 8), (8, 9), (9, 10),    // left leg
+        (1, 11), (11, 12), (12, 13), // right leg
+    ]
+
     var body: some View {
-        VideoPlayer(player: AVPlayer(url: url))
-            .ignoresSafeArea()
+        ZStack {
+            Color.black.ignoresSafeArea()
+
+            if let player = player {
+                VideoPlayer(player: player)
+                    .ignoresSafeArea()
+
+                // Skeleton overlay
+                if showSkeleton && !bodyPoints.isEmpty {
+                    GeometryReader { geo in
+                        Canvas { context, size in
+                            // Draw connection lines
+                            for (from, to) in connections {
+                                guard from < bodyPoints.count, to < bodyPoints.count else { continue }
+                                let p1 = CGPoint(x: bodyPoints[from].x * size.width, y: bodyPoints[from].y * size.height)
+                                let p2 = CGPoint(x: bodyPoints[to].x * size.width, y: bodyPoints[to].y * size.height)
+                                guard p1.x > 0 && p1.y > 0 && p2.x > 0 && p2.y > 0 else { continue }
+
+                                var path = Path()
+                                path.move(to: p1)
+                                path.addLine(to: p2)
+                                context.stroke(path, with: .color(Color.brand.opacity(0.8)), lineWidth: 3)
+                            }
+
+                            // Draw joint dots
+                            for point in bodyPoints {
+                                let p = CGPoint(x: point.x * size.width, y: point.y * size.height)
+                                guard p.x > 0 && p.y > 0 else { continue }
+                                let rect = CGRect(x: p.x - 5, y: p.y - 5, width: 10, height: 10)
+                                context.fill(Path(ellipseIn: rect), with: .color(Color.brand))
+                                let outerRect = CGRect(x: p.x - 7, y: p.y - 7, width: 14, height: 14)
+                                context.stroke(Path(ellipseIn: outerRect), with: .color(Color.brand.opacity(0.5)), lineWidth: 1.5)
+                            }
+                        }
+                        .allowsHitTesting(false)
+                    }
+                    .ignoresSafeArea()
+                }
+            }
+
+            // Controls overlay
+            VStack {
+                HStack {
+                    Spacer()
+                    // Toggle skeleton button
+                    Button {
+                        showSkeleton.toggle()
+                        Haptics.light()
+                    } label: {
+                        HStack(spacing: 5) {
+                            Image(systemName: showSkeleton ? "figure.stand" : "figure.stand.line.dotted.figure.stand")
+                                .font(.caption)
+                            Text(showSkeleton ? "Hide Pose" : "Show Pose")
+                                .font(.caption.bold())
+                        }
+                        .padding(.horizontal, 12).padding(.vertical, 8)
+                        .background(Color.black.opacity(0.6))
+                        .foregroundStyle(showSkeleton ? Color.brand : .white)
+                        .clipShape(Capsule())
+                    }
+                    .padding(.trailing, 20)
+                    .padding(.top, 60)
+                }
+                Spacer()
+            }
+        }
+        .onAppear {
+            let avPlayer = AVPlayer(url: url)
+            player = avPlayer
+            avPlayer.play()
+            startPoseAnalysis()
+        }
+        .onDisappear {
+            analysisTimer?.invalidate()
+            player?.pause()
+        }
+    }
+
+    private func startPoseAnalysis() {
+        // Analyze frames periodically for skeleton overlay
+        let asset = AVAsset(url: url)
+        let generator = AVAssetImageGenerator(asset: asset)
+        generator.appliesPreferredTrackTransform = true
+        generator.requestedTimeToleranceBefore = CMTime(seconds: 0.1, preferredTimescale: 600)
+        generator.requestedTimeToleranceAfter = CMTime(seconds: 0.1, preferredTimescale: 600)
+
+        analysisTimer = Timer.scheduledTimer(withTimeInterval: 0.2, repeats: true) { _ in
+            guard let player = player else { return }
+            let currentTime = player.currentTime()
+            guard currentTime.seconds > 0 else { return }
+
+            Task {
+                guard let cgImage = try? generator.copyCGImage(at: currentTime, actualTime: nil) else { return }
+
+                let request = VNDetectHumanBodyPoseRequest()
+                let handler = VNImageRequestHandler(cgImage: cgImage, options: [:])
+                try? handler.perform([request])
+
+                guard let observation = request.results?.first else {
+                    await MainActor.run { bodyPoints = [] }
+                    return
+                }
+
+                // Extract key joint positions (normalized 0-1 coordinates)
+                let jointNames: [VNHumanBodyPoseObservation.JointName] = [
+                    .nose, .neck,
+                    .leftShoulder, .leftElbow, .leftWrist,
+                    .rightShoulder, .rightElbow, .rightWrist,
+                    .leftHip, .leftKnee, .leftAnkle,
+                    .rightHip, .rightKnee, .rightAnkle,
+                ]
+
+                var points: [CGPoint] = []
+                for joint in jointNames {
+                    if let point = try? observation.recognizedPoint(joint), point.confidence > 0.3 {
+                        // Vision coordinates: origin bottom-left, flip Y for screen
+                        points.append(CGPoint(x: point.x, y: 1 - point.y))
+                    } else {
+                        points.append(.zero)
+                    }
+                }
+
+                await MainActor.run {
+                    withAnimation(.easeOut(duration: 0.15)) {
+                        bodyPoints = points
+                    }
+                }
+            }
+        }
     }
 }
 
